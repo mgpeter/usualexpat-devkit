@@ -45,21 +45,58 @@ function New-GitConfig {
 "@
     }
 
-    # Add standard git configuration
-    $content += @"
+    # Core settings with sensible defaults
+    $content += @'
 [core]
     autocrlf = true
     longpaths = true
+    editor = code --wait
+    excludesfile = ~/.gitignore_global
 
+'@
+
+    # Daily workflow aliases
+    $content += @'
 [alias]
-    yesterday = !"git log --reverse --branches --since='yesterday' --author=`$(git config --get user.email) --format=format:'%C(cyan bold ul) %ad %Creset %C(magenta)%h %C(blue bold) %s %Cgreen%d' --date=local"
-    recently = !"git log --reverse --branches --since='3 days ago' --author=`$(git config --get user.email) --format=format:'%C(cyan bold ul) %ad %Creset %C(magenta)%h %C(blue bold) %s %Cgreen%d' --date=local"
-    lg = log --graph --abbrev-commit --decorate --date=relative --format=format:'%C(bold blue)%h%C(reset) - %C(bold green)(%ar)%C(reset) %C(white)%s%C(reset) %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)' --all
-    ls = log --pretty=format:'%C(green bold)%h%C(blue bold)  [%cn]  %C(red)%d  %C(cyan bold)%s' --decorate
-    ll = log --pretty=format:'%C(green bold)%h%C(blue bold)  [%cn]  %C(red)%d  %C(cyan bold)%s' --decorate --numstat
-    st = status -s -b -uall
-    amend = commit -a --amend
+    yesterday = !"git log --reverse --branches --since='yesterday' --author=$(git config --get user.email) --format=format:'%C(cyan bold ul) %ad %Creset %C(magenta)%h %C(blue bold) %s %Cgreen%d' --date=local"
+    recently = !"git log --reverse --branches --since='3 days ago' --author=$(git config --get user.email) --format=format:'%C(cyan bold ul) %ad %Creset %C(magenta)%h %C(blue bold) %s %Cgreen%d' --date=local"
+    standup = !"git log --reverse --branches --since='$(if [[ \"Mon\" == \"$(date +%a)\" ]]; then echo \"last friday\"; else echo \"yesterday\"; fi)' --author=$(git config --get user.email) --format=format:'%C(cyan bold ul) %ad %Creset %C(magenta)%h %C(blue bold) %s %Cgreen%d' --date=local"
 
+'@
+
+    # Log formatting aliases
+    $content += @'
+[alias]
+    lg1 = log --graph --abbrev-commit --decorate --date=relative --format=format:'%C(bold blue)%h%C(reset) - %C(bold green)(%ar)%C(reset) %C(white)%s%C(reset) %C(dim white)- %an%C(reset)%C(bold yellow)%d%C(reset)' --all
+    lg2 = log --graph --abbrev-commit --decorate --format=format:'%C(bold blue)%h%C(reset) - %C(bold cyan)%aD%C(reset) %C(bold green)(%ar)%C(reset)%C(bold yellow)%d%C(reset)%n''          %C(white)%s%C(reset) %C(dim white)- %an%C(reset)' --all
+    lg = !"git lg1"
+    ls = log --pretty=format:'%C(green bold)%h%C(blue bold)  [%cn]  %C(red)%d  %C(cyan bold)%s' --decorate
+    la = log --pretty=format:'%C(green bold)%h%C(blue bold)  [%cn]  %C(red)%d  %C(cyan bold)%s' --decorate --all
+    ll = log --pretty=format:'%C(green bold)%h%C(blue bold)  [%cn]  %C(red)%d  %C(cyan bold)%s' --decorate --numstat
+
+'@
+
+    # Commit and status aliases
+    $content += @'
+[alias]
+    amend = commit -a --amend
+    st = status -s -b -uall
+    topcom = shortlog -s -n --since=2017-01-01
+    prettydiff = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr)%Creset' --abbrev-commit --date=relative
+
+'@
+
+    # Utility aliases (hash collision, conflict resolution, new commits)
+    $content += @'
+[alias]
+    abbr = "!sh -c 'git rev-list --all | grep ^$1 | while read commit; do git --no-pager log -n1 --pretty=format:\"%H %ci %an %s%n\" $commit; done' -"
+    gitkconflict = !gitk --left-right HEAD...MERGE_HEAD
+    new = !sh -c 'git log $1@{1}..$1@{0} "$@"'
+
+'@
+
+    # Push, branch, and help settings
+    $content += @'
 [push]
     default = simple
     autoSetupRemote = true
@@ -70,9 +107,34 @@ function New-GitConfig {
 [help]
     autocorrect = 20
 
+'@
+
+    # Full color configuration
+    $content += @'
 [color]
     ui = always
-"@
+    branch = always
+    diff = always
+    interactive = always
+    status = always
+    grep = always
+    pager = true
+    decorate = always
+    showbranch = always
+
+'@
+
+    # GPG sections (disabled by default)
+    $content += @'
+[gpg]
+    program = gpg
+
+[commit]
+    gpgSign = false
+
+[tag]
+    forceSignAnnotated = false
+'@
 
     return $content
 }

@@ -79,8 +79,12 @@ Execute-Step -stepName "Importing Terminal-Icons..." -action {
 }
 
 Execute-Step -stepName "Loading Oh My Posh configuration and theme..." -action {
-    $ohMyPoshConfig = "D:\repos\usualexpat-devkit\configuration\powershell\.mytheme-new.omp.json"
-    oh-my-posh init pwsh --config $ohMyPoshConfig | Invoke-Expression
+    $ohMyPoshConfig = $env:DEVKIT_OMP_THEME
+    if ($ohMyPoshConfig -and (Test-Path $ohMyPoshConfig)) {
+        oh-my-posh init pwsh --config $ohMyPoshConfig | Invoke-Expression
+    } else {
+        Write-Host "Oh-My-Posh theme not found at: $ohMyPoshConfig" -ForegroundColor Yellow
+    }
 }
 
 Execute-Step -stepName "Loading Chocolatey profile..." -action {
