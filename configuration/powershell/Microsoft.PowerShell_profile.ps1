@@ -56,54 +56,7 @@ function U {
     throw "Invalid character code $Code"
 }
 
-# Helper functions for Azure
-
-
-function az_login_personal {
-    $env:AZURE_CONFIG_DIR = "$HOME\.azure"
-    az login --use-device-code
-}
-
-function az_switch_personal {
-    $env:AZURE_CONFIG_DIR = "$HOME\.azure"
-    az account show
-}
-
-function az_login_usualexpat {
-    $env:AZURE_CONFIG_DIR = "$HOME\.azure-usualexpat"
-    az login --use-device-code
-}
-
-function az_switch_usualexpat {
-    $env:AZURE_CONFIG_DIR = "$HOME\.azure-usualexpat"
-    az account show
-}
-
-function az_login_tk {
-    $env:AZURE_CONFIG_DIR = "$HOME\.azure-tk"
-    az login --use-device-code
-}
-
-function az_switch_tk {
-    $env:AZURE_CONFIG_DIR = "$HOME\.azure-tk"
-    az account show
-}
-
-function az_login_tk_terraform {
-    $env:AZURE_CONFIG_DIR = "$HOME\.azure-tk-terraform"
-    az login --use-device-code
-}
-
-function az_switch_tk_terraform {
-    $env:AZURE_CONFIG_DIR = "$HOME\.azure-tk-terraform"
-    az account show
-}
-
-function az_show_current {
-    Write-Output $env:AZURE_CONFIG_DIR
-
-    az account show
-}
+# Helper functions
 
 function Get-My-Public-Ip {
     $myIP = (Invoke-WebRequest -uri "https://api.ipify.org/"). Content
