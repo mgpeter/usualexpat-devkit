@@ -866,10 +866,12 @@ function Invoke-Installation {
     <#
     .SYNOPSIS
         Executes the installation with progress display
+    .DESCRIPTION
+        Installs devkit to user space (~/.devkit/) with step-by-step progress
     .PARAMETER Config
         DevkitConfig hashtable
-    .PARAMETER DevkitRoot
-        Root path of the devkit installation
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo (for copying templates)
     .OUTPUTS
         Hashtable with installation results
     #>
@@ -878,7 +880,7 @@ function Invoke-Installation {
         [hashtable]$Config,
 
         [Parameter(Mandatory)]
-        [string]$DevkitRoot
+        [string]$SourceRoot
     )
 
     $results = @{
@@ -886,6 +888,7 @@ function Invoke-Installation {
         BackupResults = $null
         ConfigResults = $null
         ModuleResults = $null
+        ThemePath = $null
         Errors = @()
     }
 
@@ -902,6 +905,35 @@ function Invoke-Installation {
             }
         }
         @{
+            Name = "Creating user space directory"
+            Action = {
+                return Initialize-DevkitUserSpace
+            }
+        }
+        @{
+            Name = "Copying profile template"
+            Action = {
+                $profilePath = Copy-DevkitProfile -SourceRoot $SourceRoot
+                return ($null -ne $profilePath -and $profilePath -ne "")
+            }
+        }
+        @{
+            Name = "Copying Oh-My-Posh theme"
+            Action = {
+                $results.ThemePath = Copy-DevkitTheme -SourceThemePath $Config.PowerShell.OhMyPoshTheme
+                return ($null -ne $results.ThemePath -and $results.ThemePath -ne "")
+            }
+        }
+        @{
+            Name = "Generating variables.ps1"
+            Action = {
+                if ($results.ThemePath) {
+                    return Save-VariablesPs1 -ThemePath $results.ThemePath
+                }
+                return $false
+            }
+        }
+        @{
             Name = "Generating Git configuration"
             Action = {
                 $gitResult = Save-GitConfig -Config $Config
@@ -909,23 +941,16 @@ function Invoke-Installation {
             }
         }
         @{
-            Name = "Creating profile-specific configs"
+            Name = "Creating profile-specific Git configs"
             Action = {
                 $profileConfigs = Save-GitProfileConfigs -Config $Config
                 return $true
             }
         }
         @{
-            Name = "Generating variables.ps1"
-            Action = {
-                $varsResult = Save-VariablesPs1 -DevkitRoot $DevkitRoot -OhMyPoshTheme $Config.PowerShell.OhMyPoshTheme
-                return $varsResult
-            }
-        }
-        @{
             Name = "Updating PowerShell profile"
             Action = {
-                $profileResult = Update-PowerShellProfile -DevkitRoot $DevkitRoot
+                $profileResult = Update-PowerShellProfile
                 return $profileResult
             }
         }
@@ -1019,7 +1044,7 @@ function Show-InstallationStep {
     Write-SpectreHost "Applying your configuration..."
     Write-Host ""
 
-    $results = Invoke-Installation -Config $Config -DevkitRoot $DevkitRoot
+    $results = Invoke-Installation -Config $Config -SourceRoot $DevkitRoot
 
     return $results
 }

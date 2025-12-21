@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(powershell -Command \"\\(Get-Date\\).ToString\\(''yyyy-MM-dd''\\)\")"
+      "Bash(powershell -Command \"\\(Get-Date\\).ToString\\(''yyyy-MM-dd''\\)\")",
+      "Bash(tree:*)",
+      "Bash(dir:*)"
     ]
   }
 }

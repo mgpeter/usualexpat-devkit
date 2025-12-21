@@ -8,8 +8,8 @@
     modification, with automatic cleanup of old backups.
 #>
 
-# Default backup directory
-$script:BackupRoot = Join-Path $env:USERPROFILE ".devkit-backups"
+# Default backup directory (inside user space)
+$script:BackupRoot = Join-Path $env:USERPROFILE ".devkit/backups"
 
 #region Backup Directory Management
 

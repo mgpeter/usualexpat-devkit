@@ -398,3 +398,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+
+# Devkit - generated files (should be in user space, not repo)
+configuration/powershell/variables.ps1
