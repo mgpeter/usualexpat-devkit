@@ -1,8 +1,0 @@
-
-
-[include]
-	path = D:/repos/usualexpat-devkit/configuration/git/dot_gitconfig.default
-
-[includeIf "gitdir:D:/repos/tk/"]
-	path = D:/repos/usualexpat-devkit/configuration/git/dot_tk_gitconfig.gitconfig
-

@@ -3,7 +3,11 @@
     "allow": [
       "Bash(powershell -Command \"\\(Get-Date\\).ToString\\(''yyyy-MM-dd''\\)\")",
       "Bash(tree:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(Get-ChildItem \"C:\\\\repos\\\\usualexpat\\\\usualexpat-devkit\\\\configuration\\\\powershell\"\" -Force)",
+      "Bash(Select-Object Name, Length, LastWriteTime)",
+      "Bash(Remove-Item -Path \"C:\\\\repos\\\\usualexpat\\\\usualexpat-devkit\\\\configuration\\\\git\\\\dot_gitconfig.default\" -Force -ErrorAction SilentlyContinue)",
+      "Bash(Remove-Item -Path \"C:\\\\repos\\\\usualexpat\\\\usualexpat-devkit\\\\configuration\\\\git\\\\dot_gitconfig_main.default\" -Force -ErrorAction SilentlyContinue)"
     ]
   }
 }

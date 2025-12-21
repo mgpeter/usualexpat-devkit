@@ -27,12 +27,17 @@ Set-Alias status "git status" -Option AllScope
 Set-Alias commit "git commit" -Option AllScope
 Set-Alias gut git -Option AllScope
 
-function cws { 
+function cws {
+    # Use DEVKIT_REPOS_PATH env var, or default to ~/repos
+    $reposPath = $env:DEVKIT_REPOS_PATH
+    if (-not $reposPath) {
+        $reposPath = Join-Path $env:USERPROFILE "repos"
+    }
 
-    if (Test-Path "c:\repos") {
-        Set-Location c:\repos 
+    if (Test-Path $reposPath) {
+        Set-Location $reposPath
     } else {
-        Set-Location d:\repos
+        Write-Warning "Repos path not found: $reposPath. Set `$env:DEVKIT_REPOS_PATH to configure."
     }
 }
 
@@ -135,20 +140,6 @@ $stepName = "All done, enjoy!"
 $currentTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
 Write-Host "$currentTime - " -NoNewline
 Write-Host "$stepName" -ForegroundColor Magenta
-
-
-# # $ohMyPoshConfig = "C:\Users\mgpet\AppData\Local\Programs\oh-my-posh\themes\microverse-power.omp.json"
-# # $ohMyPoshConfig = "C:\Users\mgpet\AppData\Local\Programs\oh-my-posh\themes\quick-term.omp.json"
-# # $ohMyPoshConfig = "C:\Users\mgpet\AppData\Local\Programs\oh-my-posh\themes\microverse-power.omp.json"
-# # $ohMyPoshConfig = "C:\Users\mgpet\AppData\Local\Programs\oh-my-posh\themes\lambdageneration.omp.json"
-# # $ohMyPoshConfig = "C:\Users\mgpet\AppData\Local\Programs\oh-my-posh\themes\cloud-native-azure.omp.json"
-# # $ohMyPoshConfig = "C:\Users\mgpet\AppData\Local\Programs\oh-my-posh\themes\1_shell.omp.json"
-# # $ohMyPoshConfig = "C:\Users\mgpet\AppData\Local\Programs\oh-my-posh\themes\sonicboom_dark.omp.json"
-# $ohMyPoshConfig = "C:\repos\usualexpat-devkit\configuration\.mytheme.omp.json"
-# oh-my-posh init pwsh --config $ohMyPoshConfig | Invoke-Expression
-
-
-
 
 # Custom tools
 function Move-PhotosToMonthlyFolders {
