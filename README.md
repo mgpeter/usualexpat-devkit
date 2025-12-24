@@ -1,6 +1,6 @@
-# 🚀 Devkit by Usual Expat
+# Devkit by Usual Expat
 
-## 🔹 What
+## What
 
 This repository provides a **pragmatic, versatile, and visually appealing** configuration setup for developers. It includes:  
 
@@ -18,9 +18,9 @@ Everything is designed to be **easy to set up, powerful, and visually refined**.
 
 ---
 
-## 🔹 How  
+## How
 
-### 🚀 **Installation & Setup**
+### Installation & Setup
 
 1. **Clone this repo**
 
@@ -52,18 +52,18 @@ Everything is designed to be **easy to set up, powerful, and visually refined**.
 
 3. **Restart your terminal and enjoy!**
 
-### ⚡ **PowerShell Features**
+### PowerShell Features
 
 The DevKit includes a powerful set of PowerShell features to enhance your development workflow:
 
-#### 🎨 **Visual Enhancements**
+#### Visual Enhancements
 
 - **Oh My Posh** integration with a modern, informative prompt
 - **Terminal Icons** for better file type visualization
 - **Syntax highlighting** for better code readability
 - **Auto-suggestions** for command completion
 
-#### 🛠️ **Productivity Tools**
+#### Productivity Tools
 
 - **Directory Navigation**
   - `z` command for quick directory jumping
@@ -80,7 +80,7 @@ The DevKit includes a powerful set of PowerShell features to enhance your develo
   - History-based suggestions
   - Better history navigation
 
-#### 🔧 **Custom Aliases**
+#### Custom Aliases
 
 - `yesterday` - Show commits from yesterday
 - `recently` - Show commits from the last 3 days
@@ -91,7 +91,7 @@ The DevKit includes a powerful set of PowerShell features to enhance your develo
 - `ll` - Detailed git log with changes
 - `amend` - Quick amend last commit
 
-#### ⚙️ **Configuration Management**
+#### Configuration Management
 
 - **Profile System**
   - Modular profile structure
@@ -103,7 +103,7 @@ The DevKit includes a powerful set of PowerShell features to enhance your develo
   - Profile-specific settings
   - Easy path management
 
-#### 🔍 **Search & Navigation**
+#### Search & Navigation
 
 - **Fuzzy Search**
   - Quick file finding
@@ -115,23 +115,23 @@ The DevKit includes a powerful set of PowerShell features to enhance your develo
   - Quick navigation
   - Persistent bookmarks
 
-#### 🛡️ **Security Features**
+#### Security Features
 
 - **Execution Policy Management**
 - **Secure Credential Storage**
 - **Profile Integrity Checks**
 
-#### 📦 **Module Management**
+#### Module Management
 
 - **Automatic Module Installation**
 - **Version Management**
 - **Dependency Resolution**
 
-### 📦 **PowerShell Modules**
+### PowerShell Modules
 
 The DevKit uses several powerful PowerShell modules to enhance your development experience. Here's a detailed overview of each module and how to use them:
 
-#### 🎯 **z** - Directory Jumper
+#### z - Directory Jumper
 
 - **Source**: [GitHub - rupa/z](https://github.com/rupa/z)
 - **Purpose**: Quick directory navigation using frequency and recency
@@ -144,7 +144,7 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
   z -x             # Remove directory from database
   ```
 
-#### 🎨 **Terminal Icons** - File Type Icons
+#### Terminal Icons - File Type Icons
 
 - **Source**: [PowerShell Gallery - Terminal Icons](https://www.powershellgallery.com/packages/Terminal-Icons)
 - **Purpose**: Adds file and folder icons to your terminal
@@ -155,7 +155,7 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
   Set-TerminalIconsTheme -Theme <theme-name>  # Change icon theme
   ```
 
-#### 🔄 **posh-git** - Git Integration
+#### posh-git - Git Integration
 
 - **Source**: [GitHub - dahlbyk/posh-git](https://github.com/dahlbyk/posh-git)
 - **Purpose**: Enhanced Git status and branch information
@@ -170,7 +170,7 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
   git checkout    # Shows branch suggestions
   ```
 
-#### ⌨️ **PSReadLine** - Command Line Editor
+#### PSReadLine - Command Line Editor
 
 - **Source**: [GitHub - PowerShell/PSReadLine](https://github.com/PowerShell/PSReadLine)
 - **Purpose**: Enhanced command-line editing experience
@@ -186,7 +186,7 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
   Ctrl+Shift+Space # Show completion menu with descriptions
   ```
 
-#### 🎭 **Oh My Posh** - Prompt Customization
+#### Oh My Posh - Prompt Customization
 
 - **Source**: [GitHub - JanDeDobbeleer/oh-my-posh](https://github.com/JanDeDobbeleer/oh-my-posh)
 - **Purpose**: Beautiful and informative terminal prompts
@@ -200,7 +200,7 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
   oh-my-posh init pwsh --config <theme-path> | Invoke-Expression
   ```
 
-#### 🔍 **PSFzf** - Fuzzy Finder
+#### PSFzf - Fuzzy Finder
 
 - **Source**: [GitHub - kelleyma49/PSFzf](https://github.com/kelleyma49/PSFzf)
 - **Purpose**: Fuzzy file and command finding
@@ -212,7 +212,7 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
   Alt+C            # Fuzzy directory navigation
   ```
 
-#### 🛠️ **PSFzf** - Directory Navigation
+#### PSFzf - Directory Navigation
 
 - **Source**: [PowerShell Gallery - PSFzf](https://www.powershellgallery.com/packages/PSFzf)
 - **Purpose**: Enhanced directory navigation with fuzzy finding
@@ -222,7 +222,7 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
   Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
   ```
 
-#### 📊 **PSFzf** - Git Status
+#### PSFzf - Git Status
 
 - **Source**: [PowerShell Gallery - PSFzf](https://www.powershellgallery.com/packages/PSFzf)
 - **Purpose**: Enhanced git status with fuzzy finding
@@ -232,7 +232,7 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
   git status | Fzf | Out-String | Invoke-Expression
   ```
 
-#### 🔒 **CredentialManager** - Credential Management
+#### CredentialManager - Credential Management
 
 - **Source**: [PowerShell Gallery - CredentialManager](https://www.powershellgallery.com/packages/CredentialManager)
 - **Purpose**: Secure credential storage and retrieval
@@ -243,7 +243,7 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
   Get-Credential -Target "git:https://github.com"
   ```
 
-#### 📦 **Module Management**
+#### Module Management
 
 All modules are automatically installed during the DevKit setup. To manually update modules:
 
@@ -257,15 +257,15 @@ To see all installed modules and their versions:
 Get-Module -ListAvailable | Where-Object { $_.Name -in @('z', 'Terminal-Icons', 'posh-git', 'PSReadLine', 'PSFzf', 'CredentialManager') }
 ```
 
-#### ⚙️ **Customization**
+#### Customization
 
 Each module can be customized through its configuration file or environment variables. Check the respective module's documentation for detailed customization options.
 
-### 🚀 **Azure DevOps Pipeline Automation**
+### Azure DevOps Pipeline Automation
 
 The DevKit includes powerful Azure DevOps pipeline automation capabilities that can automatically generate and configure pipelines based on your repository structure.
 
-#### 🔍 **Solution Discovery**
+#### Solution Discovery
 - **Project Analysis**
   - Automatic detection of solution files (.sln)
   - Project type identification (Web Apps, Functions, Libraries)
@@ -280,7 +280,7 @@ The DevKit includes powerful Azure DevOps pipeline automation capabilities that 
   - Azure SQL Database detection
   - Other Azure service dependencies
 
-#### 🛠️ **Pipeline Generation**
+#### Pipeline Generation
 - **Build Pipelines**
   - Multi-stage builds
   - Framework-specific build steps
@@ -295,7 +295,7 @@ The DevKit includes powerful Azure DevOps pipeline automation capabilities that 
   - Secret management
   - Health checks
 
-#### 🔄 **Automation Features**
+#### Automation Features
 - **Template Selection**
   - Framework-specific templates
   - Project type templates
@@ -308,7 +308,7 @@ The DevKit includes powerful Azure DevOps pipeline automation capabilities that 
   - Release variables
   - Secret management
 
-#### 🔒 **Security & Authentication**
+#### Security & Authentication
 - **Azure PAT Management**
   - Secure token storage
   - Token rotation
@@ -320,7 +320,7 @@ The DevKit includes powerful Azure DevOps pipeline automation capabilities that 
   - Role-based access
   - Managed identities
 
-#### 📊 **Monitoring & Reporting**
+#### Monitoring & Reporting
 - **Pipeline Analytics**
   - Build success rates
   - Test coverage trends
@@ -333,7 +333,7 @@ The DevKit includes powerful Azure DevOps pipeline automation capabilities that 
   - Log aggregation
   - Alert configuration
 
-#### 🎯 **Usage Example**
+#### Usage Example
 ```powershell
 # Initialize Azure DevOps pipeline automation
 Initialize-AzDevOpsPipeline -Organization "your-org" -Project "your-project" -PatToken "your-pat-token"
@@ -348,26 +348,23 @@ Set-AzDevOpsDeploymentConfig -Environment "dev" -ResourceGroup "my-rg" -WebAppNa
 Invoke-AzDevOpsPipelineGeneration
 ```
 
-#### ⚙️ **Configuration Options**
-```powershell
-# Pipeline configuration
-$pipelineConfig = @{
-    BuildConfiguration = "Release"
-    TestCoverageThreshold = 80
-    ArtifactRetentionDays = 30
-    DeploymentEnvironments = @("dev", "staging", "prod")
-    AzureResources = @{
-        WebApps = $true
-        Functions = $true
-        KeyVault = $true
-    }
-}
+#### Exported Functions
 
-# Apply configuration
-Set-AzDevOpsPipelineConfig -Config $pipelineConfig
-```
+The module exports the following functions:
 
-#### 🔍 **Supported Project Types**
+| Function | Purpose |
+|----------|---------|
+| `Initialize-AzDevOpsPipeline` | Configure org/project/PAT for Azure DevOps |
+| `Get-SolutionAnalysis` | Analyze .sln files for project types and Azure dependencies |
+| `New-PipelineDefinition` | Generate YAML pipeline definitions |
+| `Set-AzDevOpsPipeline` | Create pipelines via Azure DevOps REST API |
+| `Set-AzureResources` | Provision Azure resources based on detected dependencies |
+| `Get-ProjectType` | Detect project type (WebApp, Function, Library, etc.) |
+| `Get-FrameworkVersion` | Detect .NET framework version |
+| `Get-TestProjects` | Identify test projects in solution |
+| `Get-AzureDependencies` | Detect Azure service dependencies |
+
+#### Supported Project Types
 - ASP.NET Core Web Applications
 - Azure Functions
 - .NET Class Libraries
@@ -377,21 +374,21 @@ Set-AzDevOpsPipelineConfig -Config $pipelineConfig
 - NUnit Test Projects
 - MSTest Projects
 
-#### 📦 **Required Azure DevOps Extensions**
+#### Required Azure DevOps Extensions
 - Azure Pipelines
 - Azure Artifacts
 - Azure Repos
 - Azure Test Plans
 - Azure Boards
 
-#### ⚠️ **Prerequisites**
+#### Prerequisites
 - Azure DevOps Organization
 - Azure Subscription
 - Azure Service Principal
 - Azure Key Vault (optional)
 - Azure Application Insights (optional)
 
-#### 🔄 **Pipeline Templates**
+#### Pipeline Templates
 The DevKit includes pre-built templates for common scenarios:
 - Web App deployment
 - Function App deployment
@@ -400,14 +397,14 @@ The DevKit includes pre-built templates for common scenarios:
 - Test automation
 - Security scanning
 
-#### 🛡️ **Security Best Practices**
+#### Security Best Practices
 - Secure variable management
 - Secret rotation
 - Access control
 - Audit logging
 - Compliance checks
 
-#### 📈 **Future Enhancements**
+#### Future Enhancements
 - Multi-region deployment support
 - Blue-green deployment
 - Canary releases
@@ -418,18 +415,18 @@ The DevKit includes pre-built templates for common scenarios:
 
 ---
 
-## 🔹 Who  
+## Who
 
-This kit is for **developers, DevOps engineers, and power users** who want:  
+This kit is for **developers, DevOps engineers, and power users** who want:
 
-✅ A **polished** and **efficient** development environment  
-✅ Quick but **flexible** setup for Git, PowerShell, and Windows Terminal  
-✅ Ready-to-go **.NET templates** for **Azure DevOps** and **Terraform** projects  
-✅ A **beautiful** CLI experience without hassle  
+- A **polished** and **efficient** development environment
+- Quick but **flexible** setup for Git, PowerShell, and Windows Terminal
+- Ready-to-go **.NET templates** for **Azure DevOps** and **Terraform** projects
+- A **beautiful** CLI experience without hassle
 
-Whether you're a **beginner looking for a strong starting point** or a **seasoned developer** looking to streamline your workflow, this kit will help you get up and running fast! 🚀  
+Whether you're a **beginner looking for a strong starting point** or a **seasoned developer** looking to streamline your workflow, this kit will help you get up and running fast.
 
-## 🔹 Status
+## Status
 
 - ✔️ Initial git and powershell configs **[DONE]**
 
