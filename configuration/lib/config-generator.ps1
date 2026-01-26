@@ -39,7 +39,7 @@ function New-GitConfig {
         $configPath = $configPath -replace '\\', '/'
 
         $content += @"
-[includeIf "gitdir:$($profile.Directory)"]
+[includeIf "gitdir/i:$($profile.Directory)"]
     path = $configPath
 
 "@
