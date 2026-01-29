@@ -86,7 +86,7 @@ Execute-Step -stepName "Importing Terminal-Icons..." -action {
 Execute-Step -stepName "Loading Oh My Posh configuration and theme..." -action {
     $ohMyPoshConfig = $env:DEVKIT_OMP_THEME
     if ($ohMyPoshConfig -and (Test-Path $ohMyPoshConfig)) {
-        oh-my-posh init pwsh --config $ohMyPoshConfig | Invoke-Expression
+        oh-my-posh init pwsh --config "$ohMyPoshConfig" | Invoke-Expression
     } else {
         Write-Host "Oh-My-Posh theme not found at: $ohMyPoshConfig" -ForegroundColor Yellow
     }
