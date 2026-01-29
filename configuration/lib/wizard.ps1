@@ -13,12 +13,13 @@
 $script:WizardState = @{
     Mode = $null  # "Fresh" or "Update"
     CurrentStep = 0
-    TotalSteps = 7
+    TotalSteps = 8
     Config = @{
         RepoLocations = @()
         Git = @{
             DefaultProfile = @{ Name = ""; Email = "" }
             AdditionalProfiles = @()
+            Editor = ""
         }
         PowerShell = @{
             Modules = @()
@@ -109,7 +110,7 @@ function Show-StepHeader {
         [Parameter(Mandatory)]
         [string]$StepTitle,
 
-        [int]$TotalSteps = 7
+        [int]$TotalSteps = 8
     )
 
     # Use escaped brackets for Spectre markup - [[ and ]] render as literal [ and ]
@@ -292,7 +293,7 @@ function Show-RepoLocationsStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 2 -StepTitle "Repository Locations" -TotalSteps 7
+    Show-StepHeader -StepNumber 2 -StepTitle "Repository Locations" -TotalSteps 8
 
     Write-SpectreHost "Where do you store your code repositories?"
     Write-SpectreHost "[dim]These paths will be used for Git profile directory matching.[/]"
@@ -531,7 +532,7 @@ function Show-GitConfigStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 3 -StepTitle "Git Configuration" -TotalSteps 7
+    Show-StepHeader -StepNumber 3 -StepTitle "Git Configuration" -TotalSteps 8
 
     Write-SpectreHost "Configure your Git identity for commits."
     Write-SpectreHost "[dim]This sets your default name and email for all repositories.[/]"
@@ -561,6 +562,193 @@ function Show-GitConfigStep {
 
     # Show preview
     Show-GitConfigPreview -DefaultProfile $defaultProfile -AdditionalProfiles $additionalProfiles
+
+    return $Config
+}
+
+#endregion
+
+#region Git Editor Selection Step
+
+function Get-AvailableEditors {
+    <#
+    .SYNOPSIS
+        Detects installed text editors that can be used for Git commit messages
+    .OUTPUTS
+        Array of hashtables with Name, Command, and Available properties
+    #>
+
+    $editors = [System.Collections.ArrayList]::new()
+
+    # VS Code
+    $vscodeAvailable = $null -ne (Get-Command code -ErrorAction SilentlyContinue)
+    if ($vscodeAvailable) {
+        $editors.Add(@{
+            Name = "Visual Studio Code"
+            Command = "code --wait"
+            Available = $true
+        }) | Out-Null
+    }
+
+    # Neovim
+    $nvimAvailable = $null -ne (Get-Command nvim -ErrorAction SilentlyContinue)
+    if ($nvimAvailable) {
+        $editors.Add(@{
+            Name = "Neovim"
+            Command = "nvim"
+            Available = $true
+        }) | Out-Null
+    }
+
+    # Vim (standalone)
+    $vimAvailable = $null -ne (Get-Command vim -ErrorAction SilentlyContinue)
+    if ($vimAvailable) {
+        $editors.Add(@{
+            Name = "Vim"
+            Command = "vim"
+            Available = $true
+        }) | Out-Null
+    }
+
+    # Vim (Git bundled)
+    $gitVimPath = "$env:ProgramFiles\Git\usr\bin\vim.exe"
+    if (Test-Path $gitVimPath) {
+        # Only add if standalone vim wasn't found
+        if (-not $vimAvailable) {
+            $editors.Add(@{
+                Name = "Vim (Git bundled)"
+                Command = "'C:\\Program Files\\Git\\usr\\bin\\vim.exe'"
+                Available = $true
+            }) | Out-Null
+        }
+    }
+
+    # Notepad++
+    $notepadPlusPlusPath = "$env:ProgramFiles\Notepad++\notepad++.exe"
+    $notepadPlusPlusPath86 = "${env:ProgramFiles(x86)}\Notepad++\notepad++.exe"
+    if (Test-Path $notepadPlusPlusPath) {
+        $editors.Add(@{
+            Name = "Notepad++"
+            Command = "'C:\\Program Files\\Notepad++\\notepad++.exe' -multiInst -notabbar -nosession -noPlugin"
+            Available = $true
+        }) | Out-Null
+    } elseif (Test-Path $notepadPlusPlusPath86) {
+        $editors.Add(@{
+            Name = "Notepad++"
+            Command = "'C:\\Program Files (x86)\\Notepad++\\notepad++.exe' -multiInst -notabbar -nosession -noPlugin"
+            Available = $true
+        }) | Out-Null
+    }
+
+    # Nano
+    $nanoAvailable = $null -ne (Get-Command nano -ErrorAction SilentlyContinue)
+    if ($nanoAvailable) {
+        $editors.Add(@{
+            Name = "Nano"
+            Command = "nano"
+            Available = $true
+        }) | Out-Null
+    }
+
+    # Always add custom option
+    $editors.Add(@{
+        Name = "(Enter custom editor command...)"
+        Command = ""
+        Available = $true
+    }) | Out-Null
+
+    return ,$editors
+}
+
+function Get-EditorSelection {
+    <#
+    .SYNOPSIS
+        Prompts user to select a Git commit message editor
+    .PARAMETER AvailableEditors
+        Array of available editor objects
+    .PARAMETER CurrentEditor
+        Currently configured editor command
+    .OUTPUTS
+        Selected editor command string
+    #>
+    param(
+        [array]$AvailableEditors,
+        [string]$CurrentEditor = ""
+    )
+
+    # Show current editor if set
+    if ($CurrentEditor) {
+        Write-SpectreHost "[yellow]Current editor: $CurrentEditor[/]"
+        Write-Host ""
+    }
+
+    # Build choice labels
+    $choices = [System.Collections.ArrayList]::new()
+    foreach ($editor in $AvailableEditors) {
+        $choices.Add($editor.Name) | Out-Null
+    }
+
+    Write-SpectreHost "[cyan]Select your preferred Git commit message editor:[/]"
+    Write-Host ""
+
+    $selected = Read-SpectreSelection `
+        -Title "Git Editor" `
+        -Choices $choices `
+        -Color Blue
+
+    # Find the selected editor
+    $selectedEditor = $AvailableEditors | Where-Object { $_.Name -eq $selected } | Select-Object -First 1
+
+    if ($selected -eq "(Enter custom editor command...)") {
+        # Prompt for custom command
+        Write-Host ""
+        Write-SpectreHost "[dim]Enter the command Git should use to open your editor.[/]"
+        Write-SpectreHost "[dim]Examples: 'notepad', 'code --wait', 'vim'[/]"
+        Write-Host ""
+        $customCommand = Read-SpectreText -Prompt "Editor command"
+        return $customCommand
+    }
+
+    return $selectedEditor.Command
+}
+
+function Show-GitEditorStep {
+    <#
+    .SYNOPSIS
+        Displays the Git editor selection wizard step
+    .PARAMETER Config
+        Current configuration
+    .OUTPUTS
+        Updated configuration
+    #>
+    param(
+        [hashtable]$Config
+    )
+
+    Show-StepHeader -StepNumber 4 -StepTitle "Git Editor" -TotalSteps 8
+
+    Write-SpectreHost "Select the editor Git will use for commit messages and interactive operations."
+    Write-SpectreHost "[dim]This is used when you run 'git commit' without -m, or during rebases.[/]"
+    Write-Host ""
+
+    # Get available editors
+    $editors = Get-AvailableEditors
+
+    if ($editors.Count -le 1) {
+        Write-SpectreHost "[yellow]No common editors detected. You can specify a custom editor command.[/]"
+    }
+
+    # Get current editor
+    $currentEditor = ""
+    if ($Config.Git.Editor) {
+        $currentEditor = $Config.Git.Editor
+    }
+
+    $selectedEditor = Get-EditorSelection -AvailableEditors $editors -CurrentEditor $currentEditor
+    $Config.Git.Editor = $selectedEditor
+
+    Write-Host ""
+    Write-SpectreHost "[green]Selected editor: $selectedEditor[/]"
 
     return $Config
 }
@@ -675,7 +863,7 @@ function Show-PowerShellModulesStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 4 -StepTitle "PowerShell Modules" -TotalSteps 7
+    Show-StepHeader -StepNumber 5 -StepTitle "PowerShell Modules" -TotalSteps 8
 
     Write-SpectreHost "Select PowerShell modules to enhance your terminal experience."
     Write-SpectreHost "[dim]These modules add features like Git status, directory jumping, and icons.[/]"
@@ -830,7 +1018,7 @@ function Show-OhMyPoshStep {
         [string]$DevkitRoot = ""
     )
 
-    Show-StepHeader -StepNumber 5 -StepTitle "Oh-My-Posh Theme" -TotalSteps 7
+    Show-StepHeader -StepNumber 6 -StepTitle "Oh-My-Posh Theme" -TotalSteps 8
 
     Write-SpectreHost "Select a theme for your terminal prompt."
     Write-SpectreHost "[dim]Oh-My-Posh provides beautiful, informative prompts with Git status and more.[/]"
@@ -1039,7 +1227,7 @@ function Show-InstallationStep {
         [string]$DevkitRoot
     )
 
-    Show-StepHeader -StepNumber 7 -StepTitle "Installing" -TotalSteps 7
+    Show-StepHeader -StepNumber 8 -StepTitle "Installing" -TotalSteps 8
 
     Write-SpectreHost "Applying your configuration..."
     Write-Host ""
@@ -1068,9 +1256,11 @@ function Show-ConfigurationSummary {
     Write-Host ""
 
     # Git Configuration
+    $editorValue = if ($Config.Git.Editor) { $Config.Git.Editor } else { "(not set)" }
     $gitData = @(
         [PSCustomObject]@{ Setting = "Git Name"; Value = $Config.Git.DefaultProfile.Name }
         [PSCustomObject]@{ Setting = "Git Email"; Value = $Config.Git.DefaultProfile.Email }
+        [PSCustomObject]@{ Setting = "Git Editor"; Value = $editorValue }
     )
 
     # Add additional profiles
@@ -1187,14 +1377,17 @@ function Start-Wizard {
     # Step 3: Git Configuration
     $script:WizardState.Config = Show-GitConfigStep -Config $script:WizardState.Config
 
-    # Step 4: PowerShell Modules
+    # Step 4: Git Editor
+    $script:WizardState.Config = Show-GitEditorStep -Config $script:WizardState.Config
+
+    # Step 5: PowerShell Modules
     $script:WizardState.Config = Show-PowerShellModulesStep -Config $script:WizardState.Config
 
-    # Step 5: Oh-My-Posh Theme
+    # Step 6: Oh-My-Posh Theme
     $script:WizardState.Config = Show-OhMyPoshStep -Config $script:WizardState.Config -DevkitRoot $DevkitRoot
 
     # Confirmation step
-    Show-StepHeader -StepNumber 6 -StepTitle "Review Configuration" -TotalSteps 7
+    Show-StepHeader -StepNumber 7 -StepTitle "Review Configuration" -TotalSteps 8
 
     # Use fully collected config
     $displayConfig = @{

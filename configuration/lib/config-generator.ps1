@@ -46,14 +46,15 @@ function New-GitConfig {
     }
 
     # Core settings with sensible defaults
-    $content += @'
+    $editorValue = if ($Config.Git.Editor) { $Config.Git.Editor } else { "code --wait" }
+    $content += @"
 [core]
     autocrlf = true
     longpaths = true
-    editor = code --wait
+    editor = $editorValue
     excludesfile = ~/.gitignore_global
 
-'@
+"@
 
     # Daily workflow aliases
     $content += @'

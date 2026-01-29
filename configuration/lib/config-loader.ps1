@@ -26,6 +26,7 @@ function Get-ExistingGitConfig {
         }
         AdditionalProfiles = @()
         IncludeIfPaths = @()
+        Editor = ""
     }
 
     $gitConfigPath = Join-Path $env:USERPROFILE ".gitconfig"
@@ -51,9 +52,11 @@ function Get-ExistingGitConfig {
         # Alternative: use git config command for more reliable parsing
         $gitName = git config --global user.name 2>$null
         $gitEmail = git config --global user.email 2>$null
+        $gitEditor = git config --global core.editor 2>$null
 
         if ($gitName) { $result.DefaultProfile.Name = $gitName }
         if ($gitEmail) { $result.DefaultProfile.Email = $gitEmail }
+        if ($gitEditor) { $result.Editor = $gitEditor }
 
         # Parse includeIf sections for additional profiles
         $includeIfPattern = '\[includeIf\s+"gitdir:([^"]+)"\]\s*\n\s*path\s*=\s*(.+?)\s*\n'
@@ -279,6 +282,7 @@ function Get-ExistingConfiguration {
                 Email = ""
             }
             AdditionalProfiles = @()
+            Editor = ""
         }
         PowerShell = @{
             Modules = @()
@@ -300,6 +304,7 @@ function Get-ExistingConfiguration {
         $config.Git.DefaultProfile.Name = $gitConfig.DefaultProfile.Name
         $config.Git.DefaultProfile.Email = $gitConfig.DefaultProfile.Email
         $config.Git.AdditionalProfiles = $gitConfig.AdditionalProfiles
+        $config.Git.Editor = $gitConfig.Editor
     }
 
     # Load PowerShell profile info

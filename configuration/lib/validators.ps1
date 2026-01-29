@@ -269,6 +269,7 @@ function New-DevkitConfig {
                 Email = ""
             }
             AdditionalProfiles = @()
+            Editor = ""
         }
         PowerShell = @{
             Modules = @()
