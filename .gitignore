@@ -401,3 +401,6 @@ FodyWeavers.xsd
 
 # Devkit - generated files (should be in user space, not repo)
 configuration/powershell/variables.ps1
+
+# Claude
+.claude/settings.local.json
