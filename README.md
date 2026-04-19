@@ -40,6 +40,7 @@ Everything is designed to be **easy to set up, powerful, and visually refined**.
    The wizard will guide you through:
    - **Repository Locations** - Select where you store your code
    - **Git Configuration** - Set up your name, email, and directory-specific profiles
+   - **Git Editor** - Pick your commit message editor (VS Code, Neovim, Vim, Notepad++, Nano, or custom)
    - **PowerShell Modules** - Choose which modules to install (z, posh-git, Terminal-Icons, etc.)
    - **Oh-My-Posh Theme** - Select your terminal theme
 
