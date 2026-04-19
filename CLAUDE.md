@@ -20,7 +20,6 @@ configuration/
 ├── powershell/
 │   ├── Microsoft.PowerShell_profile.ps1  # Profile template
 │   └── .mytheme-new.omp.json             # Oh-My-Posh theme
-├── git/                     # (empty - configs generated dynamically)
 azure-devops/
 ├── install.ps1              # Azure module installer
 ├── AzDevOpsPipelineAutomation/

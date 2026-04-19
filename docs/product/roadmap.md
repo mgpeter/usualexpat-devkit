@@ -18,39 +18,35 @@ The following features have been implemented:
 - [x] YAML pipeline generation with build, test, and deployment stages
 - [x] Azure resource provisioning functions
 - [x] Utility functions (Move-PhotosToMonthlyFolders, Get-MailDomainInfo)
+- [x] Removed deprecated multi-tenant Azure CLI functions from PowerShell profile (DEC-004)
+- [x] Interactive CLI Installation Wizard (PwshSpectreConsole) - see spec `2025-12-20-interactive-cli-wizard`
+  - Fresh install / Update mode detection
+  - Repository locations multi-select with path validation
+  - Default Git profile + directory-specific `includeIf` profiles (case-insensitive)
+  - Git commit message editor selection (VS Code, Neovim, Vim, Notepad++, Nano, custom)
+  - PowerShell module multi-select (z, posh-git, Terminal-Icons, PSReadLine, PSFzf, CompletionPredictor)
+  - Oh-My-Posh theme selection (devkit + built-in themes) with quoted path handling
+  - Review step with summary tables and confirmation
+- [x] User-space installation architecture (`~/.devkit/`) decoupled from source repo
+- [x] Automatic timestamped backup system with 5-backup retention
+- [x] Input validators (email, directory paths, non-empty names)
+- [x] README cleanup - reduced emoji use, accurate Azure DevOps module docs (spec `2025-12-20-readme-cleanup`)
 
-## Phase 1: Current Development
+## Phase 1: Rollback and Restore
 
-**Goal:** Clean up codebase and add Windows Terminal support
-**Success Criteria:** Clean profile without deprecated features, Windows Terminal configuration included
+**Goal:** Give users a safety net when an install or update misbehaves
+**Success Criteria:** A single command restores the most recent backup of Git and PowerShell config files
 
 ### Features
 
-- [ ] Remove deprecated multi-tenant Azure CLI functions - Approach doesn't work well in practice `S`
-- [ ] Add Windows Terminal configuration - Theme and profile settings `M`
-- [ ] Update README to reflect current feature set `XS`
+- [ ] `Restore-DevkitBackup` command - Revert `.gitconfig`, profile, and `variables.ps1` from `~/.devkit/backups/` `S`
+- [ ] Wizard entry point for restore - List available backups, select one, apply `S`
 
 ### Dependencies
 
 - None
 
-## Phase 2: Interactive Experience
-
-**Goal:** Improve installation experience with interactive prompts
-**Success Criteria:** Users can configure their environment through guided prompts
-
-### Features
-
-- [ ] Interactive PowerShell installer - Guided module selection and configuration `M`
-- [ ] Interactive Git configuration wizard - Step-by-step profile setup `M`
-- [ ] Configuration validation - Verify successful installation `S`
-- [ ] Rollback capability - Undo changes if installation fails `M`
-
-### Dependencies
-
-- Phase 1 completion
-
-## Phase 3: Project Templates
+## Phase 2: Project Templates
 
 **Goal:** Provide .NET project templates optimized for Azure DevOps and Terraform
 **Success Criteria:** Users can scaffold new projects with pre-configured CI/CD
@@ -65,9 +61,9 @@ The following features have been implemented:
 
 ### Dependencies
 
-- Phase 1 completion
+- None
 
-## Phase 4: Community & Polish
+## Phase 3: Community & Polish
 
 **Goal:** Prepare for open source community adoption
 **Success Criteria:** Clear documentation, contribution guidelines, and consistent quality
@@ -82,9 +78,9 @@ The following features have been implemented:
 
 ### Dependencies
 
-- Phase 2 and 3 completion
+- Phase 2 completion
 
-## Phase 5: Advanced Features
+## Phase 4: Advanced Features
 
 **Goal:** Enterprise-ready features and advanced automation
 **Success Criteria:** Support for complex multi-repo and multi-environment scenarios
@@ -99,7 +95,7 @@ The following features have been implemented:
 
 ### Dependencies
 
-- Phase 4 completion
+- Phase 3 completion
 
 ## Effort Scale
 
