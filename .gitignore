@@ -403,4 +403,5 @@ FodyWeavers.xsd
 configuration/powershell/variables.ps1
 
 # Claude
+.claude/
 .claude/settings.local.json
