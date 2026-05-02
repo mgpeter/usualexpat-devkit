@@ -20,11 +20,6 @@ configuration/
 ├── powershell/
 │   ├── Microsoft.PowerShell_profile.ps1  # Profile template
 │   └── .mytheme-new.omp.json             # Oh-My-Posh theme
-azure-devops/
-├── install.ps1              # Azure module installer
-├── AzDevOpsPipelineAutomation/
-│   ├── AzDevOpsPipelineAutomation.psm1   # Main PowerShell module
-│   └── AzDevOpsPipelineAutomation.psd1   # Module manifest
 ```
 
 ## Installation
@@ -71,17 +66,6 @@ The installer copies files to `~/.devkit/` making the installation independent o
 - Multi-profile support via `includeIf` for directory-based email switching
 - Pre-configured aliases: `yesterday`, `recently`, `standup`, `lg`, `ls`, `la`, `ll`, `amend`
 - Auto-setup for push and rebase behaviors
-
-### Azure DevOps Pipeline Automation Module
-
-Key exported functions:
-- `Initialize-AzDevOpsPipeline` - Configure org/project/PAT
-- `Get-SolutionAnalysis` - Analyze .sln files for project types and Azure dependencies
-- `New-PipelineDefinition` - Generate YAML pipeline definitions
-- `Set-AzDevOpsPipeline` - Create pipelines via Azure DevOps REST API
-- `Set-AzureResources` - Provision Azure resources based on detected dependencies
-
-The module auto-detects: WebApps, FunctionApps, KeyVault, SqlDatabase, StorageAccount, ServiceBus from project references.
 
 ## Development Notes
 
