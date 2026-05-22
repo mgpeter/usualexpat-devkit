@@ -13,7 +13,7 @@
 $script:WizardState = @{
     Mode = $null  # "Fresh" or "Update"
     CurrentStep = 0
-    TotalSteps = 8
+    TotalSteps = 9
     Config = @{
         RepoLocations = @()
         Git = @{
@@ -110,7 +110,7 @@ function Show-StepHeader {
         [Parameter(Mandatory)]
         [string]$StepTitle,
 
-        [int]$TotalSteps = 8
+        [int]$TotalSteps = 9
     )
 
     # Use escaped brackets for Spectre markup - [[ and ]] render as literal [ and ]
@@ -293,7 +293,7 @@ function Show-RepoLocationsStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 2 -StepTitle "Repository Locations" -TotalSteps 8
+    Show-StepHeader -StepNumber 2 -StepTitle "Repository Locations" -TotalSteps 9
 
     Write-SpectreHost "Where do you store your code repositories?"
     Write-SpectreHost "[dim]These paths will be used for Git profile directory matching.[/]"
@@ -532,7 +532,7 @@ function Show-GitConfigStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 3 -StepTitle "Git Configuration" -TotalSteps 8
+    Show-StepHeader -StepNumber 3 -StepTitle "Git Configuration" -TotalSteps 9
 
     Write-SpectreHost "Configure your Git identity for commits."
     Write-SpectreHost "[dim]This sets your default name and email for all repositories.[/]"
@@ -725,7 +725,7 @@ function Show-GitEditorStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 4 -StepTitle "Git Editor" -TotalSteps 8
+    Show-StepHeader -StepNumber 4 -StepTitle "Git Editor" -TotalSteps 9
 
     Write-SpectreHost "Select the editor Git will use for commit messages and interactive operations."
     Write-SpectreHost "[dim]This is used when you run 'git commit' without -m, or during rebases.[/]"
@@ -863,7 +863,7 @@ function Show-PowerShellModulesStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 5 -StepTitle "PowerShell Modules" -TotalSteps 8
+    Show-StepHeader -StepNumber 5 -StepTitle "PowerShell Modules" -TotalSteps 9
 
     Write-SpectreHost "Select PowerShell modules to enhance your terminal experience."
     Write-SpectreHost "[dim]These modules add features like Git status, directory jumping, and icons.[/]"
@@ -1018,7 +1018,7 @@ function Show-OhMyPoshStep {
         [string]$DevkitRoot = ""
     )
 
-    Show-StepHeader -StepNumber 6 -StepTitle "Oh-My-Posh Theme" -TotalSteps 8
+    Show-StepHeader -StepNumber 6 -StepTitle "Oh-My-Posh Theme" -TotalSteps 9
 
     Write-SpectreHost "Select a theme for your terminal prompt."
     Write-SpectreHost "[dim]Oh-My-Posh provides beautiful, informative prompts with Git status and more.[/]"
@@ -1042,6 +1042,84 @@ function Show-OhMyPoshStep {
 
     Write-Host ""
     Write-SpectreHost "[green]Selected theme: $selectedTheme[/]"
+
+    return $Config
+}
+
+#endregion
+
+#region Neovim Configuration Step
+
+function Show-NvimConfigStep {
+    <#
+    .SYNOPSIS
+        Wizard step for installing the bundled Neovim configuration
+    .PARAMETER Config
+        Current DevkitConfig hashtable
+    .OUTPUTS
+        Updated configuration hashtable
+    #>
+    param(
+        [hashtable]$Config
+    )
+
+    Show-StepHeader -StepNumber 7 -StepTitle "Neovim Configuration" -TotalSteps 9
+
+    Write-SpectreHost "Install the bundled Neovim configuration (lazy.nvim + neo-tree + easy-dotnet)."
+    Write-SpectreHost "[dim]Installs to `$env:LOCALAPPDATA\nvim\ - Neovim's standard Windows location.[/]"
+    Write-Host ""
+
+    $nvim = Test-NeovimAvailable
+    if (-not $nvim.Found) {
+        Write-SpectreHost "[yellow]Neovim is not on PATH.[/]"
+        Write-SpectreHost "[dim]The config will still be installed; install Neovim with 'winget install Neovim.Neovim' to use it.[/]"
+        Write-Host ""
+    } else {
+        $versionText = if ($nvim.Version) { "v$($nvim.Version)" } else { "(version unknown)" }
+        Write-SpectreHost "[green]Detected Neovim $versionText at $($nvim.Path)[/]"
+        Write-Host ""
+    }
+
+    $existingNvimFound = $false
+    $existingDevkitManaged = $false
+    if ($Config._Detection -and $Config._Detection.NvimConfigFound) {
+        $existingNvimFound = $true
+        if ($Config.Nvim) {
+            $existingDevkitManaged = [bool]$Config.Nvim.ExistingIsDevkitManaged
+        }
+    }
+
+    # Ensure the Nvim sub-hashtable exists even when config-loader didn't populate it
+    if (-not $Config.ContainsKey('Nvim')) {
+        $Config.Nvim = @{ Install = $false }
+    }
+
+    if ($existingNvimFound -and -not $existingDevkitManaged) {
+        Write-SpectreHost "[yellow]Existing Neovim configuration detected at `$env:LOCALAPPDATA\nvim\.[/]"
+        $pm = $Config.Nvim.ExistingPluginManager
+        if ($pm) {
+            Write-Host "  Plugin manager: $pm"
+        }
+        Write-SpectreHost "[dim]It will be backed up under ~/.devkit/backups/nvim_<timestamp>/ before being replaced.[/]"
+        Write-Host ""
+
+        $Config.Nvim.Install = Read-SpectreConfirm -Prompt "Back up and replace it with the devkit config?" -DefaultAnswer "y"
+        if (-not $Config.Nvim.Install) {
+            Write-SpectreHost "[yellow]Skipping Neovim configuration; existing config will be left in place.[/]"
+            return $Config
+        }
+    } elseif ($existingNvimFound -and $existingDevkitManaged) {
+        Write-SpectreHost "[cyan]Devkit-managed Neovim config already present. It will be refreshed from the template.[/]"
+        Write-Host ""
+        $Config.Nvim.Install = Read-SpectreConfirm -Prompt "Refresh the devkit Neovim configuration?" -DefaultAnswer "y"
+    } else {
+        $Config.Nvim.Install = Read-SpectreConfirm -Prompt "Install the devkit Neovim configuration?" -DefaultAnswer "y"
+    }
+
+    if ($Config.Nvim.Install) {
+        Write-Host ""
+        Write-SpectreHost "[green]Neovim configuration will be installed.[/]"
+    }
 
     return $Config
 }
@@ -1093,6 +1171,13 @@ function Invoke-Installation {
             }
         }
         @{
+            Name = "Clearing Terminal-Icons CLIXML cache"
+            Action = {
+                Clear-TerminalIconsCache | Out-Null
+                return $true
+            }
+        }
+        @{
             Name = "Creating user space directory"
             Action = {
                 return Initialize-DevkitUserSpace
@@ -1110,6 +1195,17 @@ function Invoke-Installation {
             Action = {
                 $results.ThemePath = Copy-DevkitTheme -SourceThemePath $Config.PowerShell.OhMyPoshTheme
                 return ($null -ne $results.ThemePath -and $results.ThemePath -ne "")
+            }
+        }
+        @{
+            Name = "Installing Neovim configuration"
+            Action = {
+                if (-not ($Config.Nvim -and $Config.Nvim.Install)) {
+                    Write-SpectreHost "  [dim](skipped - not selected)[/]"
+                    return $true
+                }
+                $nvimPath = Copy-DevkitNvimConfig -SourceRoot $SourceRoot
+                return ($null -ne $nvimPath -and $nvimPath -ne "")
             }
         }
         @{
@@ -1227,7 +1323,7 @@ function Show-InstallationStep {
         [string]$DevkitRoot
     )
 
-    Show-StepHeader -StepNumber 8 -StepTitle "Installing" -TotalSteps 8
+    Show-StepHeader -StepNumber 9 -StepTitle "Installing" -TotalSteps 9
 
     Write-SpectreHost "Applying your configuration..."
     Write-Host ""
@@ -1292,6 +1388,15 @@ function Show-ConfigurationSummary {
         [PSCustomObject]@{ Setting = "Oh-My-Posh Theme"; Value = $themeValue }
     )
     $psData | Format-SpectreTable -Border Rounded -Color Blue | Out-Host
+
+    # Neovim Configuration
+    Write-Host ""
+    Write-SpectreHost "[blue]Neovim Configuration:[/]"
+    $nvimInstall = if ($Config.Nvim -and $Config.Nvim.Install) { "Yes (installs to `$env:LOCALAPPDATA\nvim\)" } else { "No (skipped)" }
+    $nvimData = @(
+        [PSCustomObject]@{ Setting = "Install devkit nvim config"; Value = $nvimInstall }
+    )
+    $nvimData | Format-SpectreTable -Border Rounded -Color Blue | Out-Host
 }
 
 function Show-CompletionMessage {
@@ -1386,14 +1491,18 @@ function Start-Wizard {
     # Step 6: Oh-My-Posh Theme
     $script:WizardState.Config = Show-OhMyPoshStep -Config $script:WizardState.Config -DevkitRoot $DevkitRoot
 
+    # Step 7: Neovim Configuration
+    $script:WizardState.Config = Show-NvimConfigStep -Config $script:WizardState.Config
+
     # Confirmation step
-    Show-StepHeader -StepNumber 7 -StepTitle "Review Configuration" -TotalSteps 8
+    Show-StepHeader -StepNumber 8 -StepTitle "Review Configuration" -TotalSteps 9
 
     # Use fully collected config
     $displayConfig = @{
         RepoLocations = $script:WizardState.Config.RepoLocations
         Git = $script:WizardState.Config.Git
         PowerShell = $script:WizardState.Config.PowerShell
+        Nvim = $script:WizardState.Config.Nvim
     }
 
     Show-ConfigurationSummary -Config $displayConfig

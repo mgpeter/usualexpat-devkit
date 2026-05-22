@@ -152,6 +152,63 @@ function Get-ExistingPowerShellConfig {
 
 #endregion
 
+#region Neovim Configuration Detection
+
+function Get-ExistingNvimConfig {
+    <#
+    .SYNOPSIS
+        Detects existing Neovim configuration in the standard Windows location
+    .OUTPUTS
+        Hashtable with Found, ConfigRoot, PluginManager, IsDevkitManaged
+    #>
+
+    $result = @{
+        Found = $false
+        ConfigRoot = ""
+        PluginManager = $null  # 'lazy', 'packer', 'plug', or $null
+        IsDevkitManaged = $false
+    }
+
+    $configRoot = Join-Path $env:LOCALAPPDATA "nvim"
+    $initLua = Join-Path $configRoot "init.lua"
+    $initVim = Join-Path $configRoot "init.vim"
+
+    $initPath = $null
+    if (Test-Path $initLua) { $initPath = $initLua }
+    elseif (Test-Path $initVim) { $initPath = $initVim }
+
+    if (-not $initPath) {
+        return $result
+    }
+
+    $result.Found = $true
+    $result.ConfigRoot = $configRoot
+
+    try {
+        $content = Get-Content $initPath -Raw -ErrorAction SilentlyContinue
+        if ($content) {
+            # Marker placed by Copy-DevkitNvimConfig at the top of init.lua
+            if ($content -match '(?m)^\s*--\s*devkit-managed') {
+                $result.IsDevkitManaged = $true
+            }
+
+            if ($content -match 'require\(["'']lazy["'']\)|folke/lazy\.nvim') {
+                $result.PluginManager = 'lazy'
+            } elseif ($content -match 'require\(["'']packer["'']\)|wbthomason/packer\.nvim') {
+                $result.PluginManager = 'packer'
+            } elseif ($content -match '\bPlug\s+["'']') {
+                $result.PluginManager = 'plug'
+            }
+        }
+    } catch {
+        Write-Warning "Error parsing Neovim config: $_"
+    }
+
+    return $result
+}
+
+#endregion
+
 #region Devkit Variables Detection
 
 function Get-ExistingDevkitVariables {
@@ -288,11 +345,17 @@ function Get-ExistingConfiguration {
             Modules = @()
             OhMyPoshTheme = ""
         }
+        Nvim = @{
+            Install = $false
+            ExistingPluginManager = $null
+            ExistingIsDevkitManaged = $false
+        }
         _Detection = @{
             GitConfigFound = $false
             ProfileFound = $false
             DevkitInstalled = $false
             VariablesFound = $false
+            NvimConfigFound = $false
         }
     }
 
@@ -314,6 +377,14 @@ function Get-ExistingConfiguration {
 
     if ($psConfig.OhMyPoshTheme) {
         $config.PowerShell.OhMyPoshTheme = $psConfig.OhMyPoshTheme
+    }
+
+    # Load Neovim config info
+    $nvimConfig = Get-ExistingNvimConfig
+    $config._Detection.NvimConfigFound = $nvimConfig.Found
+    if ($nvimConfig.Found) {
+        $config.Nvim.ExistingPluginManager = $nvimConfig.PluginManager
+        $config.Nvim.ExistingIsDevkitManaged = $nvimConfig.IsDevkitManaged
     }
 
     # Load Devkit variables
@@ -343,6 +414,7 @@ function Get-ExistingConfiguration {
 # Functions exported when dot-sourced:
 # - Get-ExistingGitConfig
 # - Get-ExistingPowerShellConfig
+# - Get-ExistingNvimConfig
 # - Get-ExistingDevkitVariables
 # - Get-CommonRepoLocations
 # - Get-ExistingConfiguration

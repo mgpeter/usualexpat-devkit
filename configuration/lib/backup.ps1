@@ -93,6 +93,39 @@ function Backup-ConfigFile {
     }
 }
 
+function Backup-NvimConfig {
+    <#
+    .SYNOPSIS
+        Backs up the entire Neovim config directory tree
+    .DESCRIPTION
+        Copies $env:LOCALAPPDATA\nvim\ to a timestamped subdirectory under the
+        backup root. Returns $null if no nvim config exists or on failure.
+    .OUTPUTS
+        String - Path to the backup directory, or $null
+    #>
+
+    $nvimRoot = Join-Path $env:LOCALAPPDATA "nvim"
+
+    if (-not (Test-Path $nvimRoot)) {
+        Write-Verbose "No Neovim config directory found, skipping backup"
+        return $null
+    }
+
+    $backupDir = Initialize-BackupDirectory
+    $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+    $backupName = "nvim_${timestamp}"
+    $backupPath = Join-Path $backupDir $backupName
+
+    try {
+        Copy-Item -Path $nvimRoot -Destination $backupPath -Recurse -Force
+        Write-Verbose "Backed up Neovim config: $nvimRoot -> $backupPath"
+        return $backupPath
+    } catch {
+        Write-Warning "Failed to backup Neovim config: $_"
+        return $null
+    }
+}
+
 function Backup-AllConfigFiles {
     <#
     .SYNOPSIS
@@ -129,7 +162,53 @@ function Backup-AllConfigFiles {
         }
     }
 
+    # Back up Neovim config directory tree if present
+    $nvimBackup = Backup-NvimConfig
+    if ($nvimBackup) {
+        $results.Backups += @{
+            Original = (Join-Path $env:LOCALAPPDATA "nvim")
+            Backup = $nvimBackup
+        }
+    }
+
     return $results
+}
+
+function Clear-TerminalIconsCache {
+    <#
+    .SYNOPSIS
+        Removes the Terminal-Icons CLIXML theme cache
+    .DESCRIPTION
+        Terminal-Icons caches theme data as CLIXML files under
+        $env:APPDATA\powershell\Community\Terminal-Icons\. The cached format
+        becomes unreadable across some PowerShell upgrades, producing
+        "'Text' is an invalid XmlNodeType" errors at Import-Module time.
+        Purging the cache lets Terminal-Icons regenerate it on next load.
+        Idempotent; no-op if the cache directory does not exist.
+    .OUTPUTS
+        Integer - Number of cache files removed
+    #>
+
+    $cacheDir = Join-Path $env:APPDATA 'powershell\Community\Terminal-Icons'
+
+    if (-not (Test-Path $cacheDir)) {
+        return 0
+    }
+
+    $cacheFiles = Get-ChildItem -Path $cacheDir -Filter 'devblackops_*.xml' -ErrorAction SilentlyContinue
+    $removed = 0
+
+    foreach ($file in $cacheFiles) {
+        try {
+            Remove-Item -Path $file.FullName -Force
+            $removed++
+            Write-Verbose "Removed Terminal-Icons cache file: $($file.Name)"
+        } catch {
+            Write-Warning "Failed to remove Terminal-Icons cache file $($file.Name): $_"
+        }
+    }
+
+    return $removed
 }
 
 #endregion
@@ -186,7 +265,9 @@ function Remove-OldBackups {
 
         foreach ($file in $toRemove) {
             try {
-                Remove-Item -Path $file.FullName -Force
+                # -Recurse needed for nvim-type backups (directory trees);
+                # harmless on regular file backups.
+                Remove-Item -Path $file.FullName -Recurse -Force
                 $removedCount++
                 Write-Verbose "Removed old backup: $($file.Name)"
             } catch {
@@ -209,7 +290,7 @@ function Invoke-BackupCleanup {
         [int]$KeepCount = 5
     )
 
-    $backupTypes = @("gitconfig", "powershell-profile", "gitconfig-profile")
+    $backupTypes = @("gitconfig", "powershell-profile", "gitconfig-profile", "nvim")
 
     $totalRemoved = 0
     foreach ($type in $backupTypes) {
@@ -284,6 +365,7 @@ function Get-LatestBackup {
 
 # Functions exported when dot-sourced:
 # - Initialize-BackupDirectory, Get-BackupDirectory
-# - Backup-ConfigFile, Backup-AllConfigFiles
+# - Backup-ConfigFile, Backup-AllConfigFiles, Backup-NvimConfig
+# - Clear-TerminalIconsCache
 # - Get-BackupFiles, Remove-OldBackups, Invoke-BackupCleanup
 # - Restore-ConfigFile, Get-LatestBackup

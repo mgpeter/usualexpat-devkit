@@ -80,7 +80,18 @@ Execute-Step -stepName "Importing posh-git..." -action {
 }
 
 Execute-Step -stepName "Importing Terminal-Icons..." -action {
-    Import-Module -Name Terminal-Icons
+    try {
+        Import-Module -Name Terminal-Icons -ErrorAction Stop
+    } catch {
+        # Terminal-Icons caches theme data as CLIXML; an Import-Clixml format
+        # change between PowerShell versions can render the cache unreadable.
+        # Purge the cache and retry once before propagating the failure.
+        $cache = Join-Path $env:APPDATA 'powershell\Community\Terminal-Icons'
+        if (Test-Path $cache) {
+            Remove-Item (Join-Path $cache 'devblackops_*.xml') -Force -ErrorAction SilentlyContinue
+        }
+        Import-Module -Name Terminal-Icons -ErrorAction Stop
+    }
 }
 
 Execute-Step -stepName "Loading Oh My Posh configuration and theme..." -action {

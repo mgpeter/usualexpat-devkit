@@ -327,6 +327,72 @@ function Copy-DevkitProfile {
     }
 }
 
+function Get-NvimUserRoot {
+    <#
+    .SYNOPSIS
+        Returns the standard Neovim config directory on Windows
+    .OUTPUTS
+        String - Path to $env:LOCALAPPDATA\nvim
+    #>
+    return Join-Path $env:LOCALAPPDATA "nvim"
+}
+
+function Copy-DevkitNvimConfig {
+    <#
+    .SYNOPSIS
+        Copies the bundled Neovim config template into the user's nvim directory
+    .DESCRIPTION
+        Lays down init.lua and lua/ from configuration/nvim/ to $env:LOCALAPPDATA\nvim\.
+        Does NOT touch lazy-lock.json (lazy.nvim regenerates it on first launch)
+        or nvim-data/ (plugin sources, cache, etc.). Idempotent; overwrites
+        the source files on every run.
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo
+    .OUTPUTS
+        String - Path to the nvim config root, or empty string on failure
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceRoot
+    )
+
+    $sourceDir = Join-Path $SourceRoot "configuration/nvim"
+    $destDir = Get-NvimUserRoot
+
+    if (-not (Test-Path $sourceDir)) {
+        Write-Warning "Source nvim template not found: $sourceDir"
+        return ""
+    }
+
+    try {
+        if (-not (Test-Path $destDir)) {
+            New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+        }
+
+        # Copy init.lua at the root
+        $sourceInit = Join-Path $sourceDir "init.lua"
+        if (Test-Path $sourceInit) {
+            Copy-Item -Path $sourceInit -Destination (Join-Path $destDir "init.lua") -Force
+        }
+
+        # Copy lua/ tree recursively. Use the trailing wildcard form so we
+        # merge into an existing lua/ rather than nesting a duplicate.
+        $sourceLua = Join-Path $sourceDir "lua"
+        if (Test-Path $sourceLua) {
+            $destLua = Join-Path $destDir "lua"
+            if (-not (Test-Path $destLua)) {
+                New-Item -Path $destLua -ItemType Directory -Force | Out-Null
+            }
+            Copy-Item -Path (Join-Path $sourceLua "*") -Destination $destLua -Recurse -Force
+        }
+
+        return $destDir
+    } catch {
+        Write-Warning "Failed to copy Neovim config: $_"
+        return ""
+    }
+}
+
 function Copy-DevkitTheme {
     <#
     .SYNOPSIS
@@ -666,6 +732,7 @@ function Invoke-ConfigGeneration {
 # User Space:
 # - Get-DevkitUserRoot, Initialize-DevkitUserSpace
 # - Copy-DevkitProfile, Copy-DevkitTheme
+# - Get-NvimUserRoot, Copy-DevkitNvimConfig
 # Git:
 # - New-GitConfig, Save-GitConfig
 # - Get-ProfileConfigFileName, New-GitProfileConfig, Save-GitProfileConfigs

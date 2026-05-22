@@ -250,6 +250,44 @@ function Read-ValidatedName {
 
 #endregion
 
+#region Tool Detection
+
+function Test-NeovimAvailable {
+    <#
+    .SYNOPSIS
+        Detects whether Neovim is installed and on PATH
+    .OUTPUTS
+        Hashtable with Found (bool), Version (string or $null), Path (string or $null)
+    #>
+
+    $result = @{
+        Found = $false
+        Version = $null
+        Path = $null
+    }
+
+    $cmd = Get-Command nvim -ErrorAction SilentlyContinue
+    if (-not $cmd) {
+        return $result
+    }
+
+    $result.Found = $true
+    $result.Path = $cmd.Source
+
+    try {
+        $versionOutput = & nvim --version 2>$null | Select-Object -First 1
+        if ($versionOutput -match 'NVIM\s+v?([\d\.]+)') {
+            $result.Version = $Matches[1]
+        }
+    } catch {
+        # Version probe failed; leave Version as $null but keep Found = true
+    }
+
+    return $result
+}
+
+#endregion
+
 #region Configuration Data Model
 
 function New-DevkitConfig {
@@ -274,6 +312,9 @@ function New-DevkitConfig {
         PowerShell = @{
             Modules = @()
             OhMyPoshTheme = ""
+        }
+        Nvim = @{
+            Install = $false
         }
         InstallPath = ""
         BackupPath = ""
@@ -337,4 +378,5 @@ function Test-DevkitConfig {
 # - Test-EmailAddress, Read-ValidatedEmail
 # - Test-DirectoryPath, Read-ValidatedPath
 # - Test-NonEmptyString, Read-ValidatedName
+# - Test-NeovimAvailable
 # - New-DevkitConfig, Test-DevkitConfig
