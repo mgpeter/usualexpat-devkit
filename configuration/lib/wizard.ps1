@@ -1296,6 +1296,13 @@ function Invoke-Installation {
             }
         }
         @{
+            Name = "Copying devkit CLI"
+            Action = {
+                $cliPath = Copy-DevkitCli -SourceRoot $SourceRoot
+                return ($null -ne $cliPath -and $cliPath -ne "")
+            }
+        }
+        @{
             Name = "Copying Oh-My-Posh theme"
             Action = {
                 $results.ThemePath = Copy-DevkitTheme -SourceThemePath $Config.PowerShell.OhMyPoshTheme
@@ -1317,7 +1324,7 @@ function Invoke-Installation {
             Name = "Generating variables.ps1"
             Action = {
                 if ($results.ThemePath) {
-                    return Save-VariablesPs1 -ThemePath $results.ThemePath
+                    return Save-VariablesPs1 -ThemePath $results.ThemePath -SourceRoot $SourceRoot
                 }
                 return $false
             }

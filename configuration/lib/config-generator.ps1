@@ -327,6 +327,38 @@ function Copy-DevkitProfile {
     }
 }
 
+function Copy-DevkitCli {
+    <#
+    .SYNOPSIS
+        Copies the devkit CLI script to user space
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo
+    .OUTPUTS
+        String - Path to copied devkit.ps1, or empty string on failure
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceRoot
+    )
+
+    $userRoot = Get-DevkitUserRoot
+    $sourcePath = Join-Path $SourceRoot "configuration/powershell/devkit.ps1"
+    $destPath = Join-Path $userRoot "devkit.ps1"
+
+    try {
+        if (-not (Test-Path $sourcePath)) {
+            Write-Warning "Source devkit CLI not found: $sourcePath"
+            return ""
+        }
+
+        Copy-Item -Path $sourcePath -Destination $destPath -Force
+        return $destPath
+    } catch {
+        Write-Warning "Failed to copy devkit CLI: $_"
+        return ""
+    }
+}
+
 function Get-NvimUserRoot {
     <#
     .SYNOPSIS
@@ -441,16 +473,26 @@ function New-VariablesPs1 {
         Generates variables.ps1 content for user space installation
     .PARAMETER ThemePath
         Path to the copied Oh-My-Posh theme file in user space
+    .PARAMETER SourceRoot
+        Optional path to the source devkit repo (recorded as DEVKIT_REPO_ROOT)
     .OUTPUTS
         String - Generated variables.ps1 content
     #>
     param(
         [Parameter(Mandatory)]
-        [string]$ThemePath
+        [string]$ThemePath,
+
+        [string]$SourceRoot = ""
     )
 
-    # Normalize theme path to forward slashes
+    # Normalize paths to forward slashes
     $themePath = $ThemePath -replace '\\', '/'
+
+    $repoLine = ""
+    if ($SourceRoot) {
+        $repoPath = $SourceRoot -replace '\\', '/'
+        $repoLine = "`$env:DEVKIT_REPO_ROOT = `"$repoPath`"`n"
+    }
 
     return @"
 # Devkit Environment Variables
@@ -458,6 +500,7 @@ function New-VariablesPs1 {
 
 `$env:DEVKIT_ROOT = "`$HOME/.devkit"
 `$env:DEVKIT_OMP_THEME = "$themePath"
+$repoLine
 "@
 }
 
@@ -467,19 +510,23 @@ function Save-VariablesPs1 {
         Saves the variables.ps1 file to user space
     .PARAMETER ThemePath
         Path to the copied Oh-My-Posh theme file in user space
+    .PARAMETER SourceRoot
+        Optional path to the source devkit repo (recorded as DEVKIT_REPO_ROOT)
     .OUTPUTS
         Boolean - True if successful
     #>
     param(
         [Parameter(Mandatory)]
-        [string]$ThemePath
+        [string]$ThemePath,
+
+        [string]$SourceRoot = ""
     )
 
     $userRoot = Get-DevkitUserRoot
     $variablesPath = Join-Path $userRoot "variables.ps1"
 
     try {
-        $content = New-VariablesPs1 -ThemePath $ThemePath
+        $content = New-VariablesPs1 -ThemePath $ThemePath -SourceRoot $SourceRoot
 
         # Ensure directory exists
         if (-not (Test-Path $userRoot)) {
@@ -692,7 +739,7 @@ function Invoke-ConfigGeneration {
     # Step 4: Generate variables.ps1 in user space
     try {
         if ($results.ThemeCopied) {
-            $results.Variables = Save-VariablesPs1 -ThemePath $results.ThemeCopied
+            $results.Variables = Save-VariablesPs1 -ThemePath $results.ThemeCopied -SourceRoot $SourceRoot
         }
     } catch {
         $results.Errors += "Variables: $_"
@@ -1027,7 +1074,7 @@ function Save-HerdrConfig {
 # Functions exported when dot-sourced:
 # User Space:
 # - Get-DevkitUserRoot, Initialize-DevkitUserSpace
-# - Copy-DevkitProfile, Copy-DevkitTheme
+# - Copy-DevkitProfile, Copy-DevkitCli, Copy-DevkitTheme
 # - Get-NvimUserRoot, Copy-DevkitNvimConfig
 # Claude Code & Herdr:
 # - Get-ClaudeUserRoot, Get-HerdrConfigRoot

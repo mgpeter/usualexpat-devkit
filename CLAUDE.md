@@ -19,6 +19,7 @@ configuration/
 │   └── validators.ps1       # Input validation + tool detection
 ├── powershell/
 │   ├── Microsoft.PowerShell_profile.ps1  # Profile template
+│   ├── devkit.ps1                        # In-shell `devkit` CLI (help/doctor/find/update/etc.)
 │   └── .mytheme-new.omp.json             # Oh-My-Posh theme
 └── nvim/                    # Neovim config template (init.lua + lua/plugins/)
     ├── init.lua
@@ -53,7 +54,8 @@ The installer copies files to `~/.devkit/` making the installation independent o
 ```
 ~/.devkit/
 ├── profile.ps1      # PowerShell profile
-├── variables.ps1    # Environment variables
+├── devkit.ps1       # `devkit` CLI (auto-loaded by profile.ps1)
+├── variables.ps1    # Environment variables (DEVKIT_ROOT, DEVKIT_OMP_THEME, DEVKIT_REPO_ROOT)
 ├── themes/          # Oh-My-Posh themes
 └── backups/         # Config backups
 ```
@@ -72,6 +74,15 @@ The installer copies files to `~/.devkit/` making the installation independent o
 - Multi-profile support via `includeIf` for directory-based email switching
 - Pre-configured aliases: `yesterday`, `recently`, `standup`, `lg`, `ls`, `la`, `ll`, `amend`
 - Auto-setup for push and rebase behaviors
+
+### Devkit CLI (`configuration/powershell/devkit.ps1`)
+
+- Auto-loaded by `Microsoft.PowerShell_profile.ps1` from `~/.devkit/devkit.ps1`. Exposes the `devkit` function plus a `Register-ArgumentCompleter` for tab completion.
+- Top-level subcommands: `help [topic]`, `version`, `doctor`, `find <keyword>`, `update`, `nvim refresh`, `backups list|restore`, `fix terminal-icons`.
+- Uses plain `Write-Host -ForegroundColor` instead of PwshSpectreConsole at runtime so it has zero shell-start cost beyond the dot-source itself.
+- Holds a hand-maintained registry (`$script:DevkitRegistry`) describing modules / aliases / PSReadLine keybindings / custom functions / nvim keymaps / commands. **When you add a new alias, keybinding, custom function, or nvim keymap to the profile template or `configuration/nvim/*`, also add a row to the registry** — `devkit help` and `devkit find` are the discovery surface for the user and silently get stale otherwise. Live state (installed modules, env vars, git aliases, backups) is queried at runtime and never duplicated in the registry.
+- `devkit update` and `devkit nvim refresh` dot-source from `$env:DEVKIT_REPO_ROOT` (written into `~/.devkit/variables.ps1` by `Save-VariablesPs1`). If the repo moves, those two commands print a clear error; everything else still works.
+- `devkit fix terminal-icons` inlines the cache-purge logic rather than dot-sourcing `backup.ps1`, so day-to-day commands have zero cross-file dependencies.
 
 ### Neovim Configuration (`configuration/nvim/`)
 

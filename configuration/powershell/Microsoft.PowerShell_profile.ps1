@@ -151,6 +151,12 @@ if ($host.Name -eq 'ConsoleHost') {
     }
 }
 
+# Devkit CLI - exposes `devkit` / `devkit help` / `devkit doctor` etc.
+$devkitCli = Join-Path $HOME ".devkit/devkit.ps1"
+if (Test-Path $devkitCli) {
+    . $devkitCli
+}
+
 $stepName = "All done, enjoy!"
 $currentTime = Get-Date -Format "yyyy-MM-dd HH:mm:ss.fff"
 Write-Host "$currentTime - " -NoNewline
