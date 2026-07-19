@@ -728,11 +728,311 @@ function Invoke-ConfigGeneration {
 
 #endregion
 
+#region Claude Code & Herdr
+
+function Get-ClaudeUserRoot {
+    <#
+    .SYNOPSIS
+        Returns the standard Claude Code config directory (~/.claude)
+    .OUTPUTS
+        String - Path to $env:USERPROFILE\.claude
+    #>
+    return Join-Path $env:USERPROFILE ".claude"
+}
+
+function Get-HerdrConfigRoot {
+    <#
+    .SYNOPSIS
+        Returns the herdr app config directory (%APPDATA%\herdr)
+    .OUTPUTS
+        String - Path to $env:APPDATA\herdr
+    #>
+    return Join-Path $env:APPDATA "herdr"
+}
+
+function Copy-DevkitClaudeArea {
+    <#
+    .SYNOPSIS
+        Merge-copies one Claude asset subdirectory into ~/.claude
+    .DESCRIPTION
+        Shared helper for the agents/skills/commands installers. Uses the
+        trailing-wildcard form so existing user content in the target area is
+        merged rather than nested (same approach as Copy-DevkitNvimConfig).
+        Byte-verbatim copy preserves LF line endings (e.g. herd.sh).
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo
+    .PARAMETER Area
+        Subdirectory name under configuration/claude/ and ~/.claude/ (e.g. "agents")
+    .OUTPUTS
+        String - Path to the installed area, or empty string on failure
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceRoot,
+
+        [Parameter(Mandatory)]
+        [string]$Area
+    )
+
+    $sourceDir = Join-Path $SourceRoot "configuration/claude/$Area"
+    $destDir = Join-Path (Get-ClaudeUserRoot) $Area
+
+    if (-not (Test-Path $sourceDir)) {
+        Write-Warning "Source Claude $Area not found: $sourceDir"
+        return ""
+    }
+
+    try {
+        if (-not (Test-Path $destDir)) {
+            New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+        }
+
+        # Trailing-wildcard form merges into an existing area rather than nesting.
+        Copy-Item -Path (Join-Path $sourceDir "*") -Destination $destDir -Recurse -Force
+        return $destDir
+    } catch {
+        Write-Warning "Failed to copy Claude ${Area}: $_"
+        return ""
+    }
+}
+
+function Copy-DevkitClaudeAgents {
+    <#
+    .SYNOPSIS
+        Installs the bundled Claude subagents into ~/.claude/agents
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo
+    .OUTPUTS
+        String - Path to the agents directory, or empty string on failure
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceRoot
+    )
+    return Copy-DevkitClaudeArea -SourceRoot $SourceRoot -Area "agents"
+}
+
+function Copy-DevkitClaudeSkills {
+    <#
+    .SYNOPSIS
+        Installs the bundled Claude skills (herdr, spin-up-herd) into ~/.claude/skills
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo
+    .OUTPUTS
+        String - Path to the skills directory, or empty string on failure
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceRoot
+    )
+    return Copy-DevkitClaudeArea -SourceRoot $SourceRoot -Area "skills"
+}
+
+function Copy-DevkitClaudeCommands {
+    <#
+    .SYNOPSIS
+        Installs the bundled Claude slash commands into ~/.claude/commands
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo
+    .OUTPUTS
+        String - Path to the commands directory, or empty string on failure
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceRoot
+    )
+    return Copy-DevkitClaudeArea -SourceRoot $SourceRoot -Area "commands"
+}
+
+function Copy-DevkitClaudeMd {
+    <#
+    .SYNOPSIS
+        Installs the bundled global CLAUDE.md into ~/.claude/CLAUDE.md
+    .DESCRIPTION
+        Backs up any existing ~/.claude/CLAUDE.md before overwriting.
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo
+    .OUTPUTS
+        Boolean - True if successful
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceRoot
+    )
+
+    $sourcePath = Join-Path $SourceRoot "configuration/claude/CLAUDE.md"
+    $destDir = Get-ClaudeUserRoot
+    $destPath = Join-Path $destDir "CLAUDE.md"
+
+    if (-not (Test-Path $sourcePath)) {
+        Write-Warning "Source CLAUDE.md not found: $sourcePath"
+        return $false
+    }
+
+    try {
+        if (-not (Test-Path $destDir)) {
+            New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+        }
+
+        # Back up an existing global instructions file before replacing it.
+        Backup-ConfigFile -Path $destPath -Description "claude-md" | Out-Null
+
+        Copy-Item -Path $sourcePath -Destination $destPath -Force
+        return $true
+    } catch {
+        Write-Warning "Failed to copy CLAUDE.md: $_"
+        return $false
+    }
+}
+
+function Install-HerdrHookAndSettings {
+    <#
+    .SYNOPSIS
+        Installs the herdr SessionStart hook file and merges its wiring into settings.json
+    .DESCRIPTION
+        Copies the portable herdr-agent-state.ps1 hook into ~/.claude/hooks, then
+        performs a TARGETED merge of only hooks.SessionStart in ~/.claude/settings.json.
+        All other settings (model, env, enabledPlugins, ...) are preserved untouched.
+        Idempotent: any pre-existing herdr SessionStart entry (matched on the hook
+        script name, which also heals a stale path from another machine) is replaced
+        rather than duplicated. Backs up settings.json before writing.
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo
+    .OUTPUTS
+        Boolean - True if successful
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceRoot
+    )
+
+    $claudeRoot = Get-ClaudeUserRoot
+    $hooksDir = Join-Path $claudeRoot "hooks"
+    $sourceHook = Join-Path $SourceRoot "configuration/claude/hooks/herdr-agent-state.ps1"
+    $destHook = Join-Path $hooksDir "herdr-agent-state.ps1"
+    $settingsPath = Join-Path $claudeRoot "settings.json"
+
+    try {
+        # 1. Install the hook file
+        if (-not (Test-Path $sourceHook)) {
+            Write-Warning "Source herdr hook not found: $sourceHook"
+            return $false
+        }
+        if (-not (Test-Path $hooksDir)) {
+            New-Item -Path $hooksDir -ItemType Directory -Force | Out-Null
+        }
+        Copy-Item -Path $sourceHook -Destination $destHook -Force
+
+        # 2. Back up settings.json before touching it
+        Backup-ConfigFile -Path $settingsPath -Description "claude-settings" | Out-Null
+
+        # 3. Load existing settings (mutable hashtables) or start fresh
+        $settings = @{}
+        if (Test-Path $settingsPath) {
+            $raw = Get-Content -Path $settingsPath -Raw
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $settings = $raw | ConvertFrom-Json -AsHashtable -Depth 20
+            }
+        }
+
+        # 4. Build the SessionStart command against the CURRENT user's ~/.claude
+        $command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$destHook`" session"
+
+        # 5. Ensure structure without clobbering other keys
+        if (-not $settings.ContainsKey('hooks')) { $settings['hooks'] = @{} }
+        if (-not $settings['hooks'].ContainsKey('SessionStart')) { $settings['hooks']['SessionStart'] = @() }
+
+        # 6. Idempotent de-dup: drop any existing herdr group, keep everything else
+        $kept = foreach ($grp in @($settings['hooks']['SessionStart'])) {
+            $isHerdr = $false
+            foreach ($h in @($grp.hooks)) {
+                if ("$($h.command)" -match 'herdr-agent-state\.ps1') { $isHerdr = $true }
+            }
+            if (-not $isHerdr) { $grp }
+        }
+        $herdrGroup = @{
+            matcher = '*'
+            hooks = @(@{ type = 'command'; command = $command; timeout = 10 })
+        }
+        $settings['hooks']['SessionStart'] = @($kept) + $herdrGroup
+
+        # 7. Write back (Depth 20 avoids silent nested truncation; UTF8 = no BOM)
+        $json = $settings | ConvertTo-Json -Depth 20
+        Set-Content -Path $settingsPath -Value $json -Encoding UTF8 -Force
+        return $true
+    } catch {
+        Write-Warning "Failed to install herdr hook/settings: $_"
+        return $false
+    }
+}
+
+function Save-HerdrConfig {
+    <#
+    .SYNOPSIS
+        Writes %APPDATA%\herdr\config.toml with a discovered pwsh path
+    .DESCRIPTION
+        Reads the bundled config.toml template and replaces the tokenized
+        default_shell with the pwsh path discovered by Test-PwshAvailable
+        (preferring the update-surviving App Execution Alias shim). If pwsh is
+        not found, the default_shell line is omitted so herdr falls back to its
+        own default rather than a broken path. Backs up any existing config.toml.
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo
+    .OUTPUTS
+        Boolean - True if successful
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceRoot
+    )
+
+    $templatePath = Join-Path $SourceRoot "configuration/herdr/config.toml"
+    $destDir = Get-HerdrConfigRoot
+    $destPath = Join-Path $destDir "config.toml"
+
+    if (-not (Test-Path $templatePath)) {
+        Write-Warning "Source herdr config.toml not found: $templatePath"
+        return $false
+    }
+
+    try {
+        $text = Get-Content -Path $templatePath -Raw
+
+        $pwsh = Test-PwshAvailable
+        if ($pwsh.Found -and $pwsh.Path) {
+            # Single-quoted TOML literal: backslashes in the Windows path are literal.
+            $text = $text -replace '__PWSH_PATH__', $pwsh.Path
+        } else {
+            Write-Warning "pwsh not detected; leaving herdr default_shell unset."
+            $text = $text -replace "(?m)^\s*default_shell\s*=.*$", "# default_shell not set (pwsh not detected)"
+        }
+
+        if (-not (Test-Path $destDir)) {
+            New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+        }
+
+        # Back up any existing herdr config before overwriting
+        Backup-ConfigFile -Path $destPath -Description "herdr-config" | Out-Null
+
+        Set-Content -Path $destPath -Value $text -Encoding UTF8 -Force
+        return $true
+    } catch {
+        Write-Warning "Failed to save herdr config: $_"
+        return $false
+    }
+}
+
+#endregion
+
 # Functions exported when dot-sourced:
 # User Space:
 # - Get-DevkitUserRoot, Initialize-DevkitUserSpace
 # - Copy-DevkitProfile, Copy-DevkitTheme
 # - Get-NvimUserRoot, Copy-DevkitNvimConfig
+# Claude Code & Herdr:
+# - Get-ClaudeUserRoot, Get-HerdrConfigRoot
+# - Copy-DevkitClaudeAgents, Copy-DevkitClaudeSkills, Copy-DevkitClaudeCommands, Copy-DevkitClaudeMd
+# - Install-HerdrHookAndSettings, Save-HerdrConfig
 # Git:
 # - New-GitConfig, Save-GitConfig
 # - Get-ProfileConfigFileName, New-GitProfileConfig, Save-GitProfileConfigs

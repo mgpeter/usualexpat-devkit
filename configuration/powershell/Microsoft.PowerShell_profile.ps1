@@ -44,6 +44,10 @@ function cws {
 function cuserprofile { Set-Location ~ }
 Set-Alias ~ cuserprofile -Option AllScope
 
+function check-excluded-ports {
+    netsh int ipv4 show excludedportrange protocol=tcp
+}
+
 function U {
     param
     (

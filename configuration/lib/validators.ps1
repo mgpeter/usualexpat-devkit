@@ -286,6 +286,104 @@ function Test-NeovimAvailable {
     return $result
 }
 
+function Test-PwshAvailable {
+    <#
+    .SYNOPSIS
+        Detects PowerShell 7 (pwsh) on the machine, preferring the update-surviving shim
+    .DESCRIPTION
+        Detection order:
+          1. The App Execution Alias shim ($env:LOCALAPPDATA\Microsoft\WindowsApps\pwsh.exe)
+             - preferred because it survives pwsh version updates, unlike the
+             version-stamped WindowsApps package path.
+          2. pwsh on PATH (Get-Command).
+          3. The running process (the installer requires pwsh 7, so $PSHOME\pwsh.exe
+             is a valid last resort).
+    .OUTPUTS
+        Hashtable with Found (bool), Version (string or $null), Path (string or $null),
+        Source (string: 'WindowsApps-alias' | 'PATH' | 'current-process' or $null)
+    #>
+
+    $result = @{
+        Found = $false
+        Version = $null
+        Path = $null
+        Source = $null
+    }
+
+    $shim = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\pwsh.exe"
+    if (Test-Path $shim) {
+        $result.Found = $true
+        $result.Path = $shim
+        $result.Source = 'WindowsApps-alias'
+    } else {
+        $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
+        if ($cmd) {
+            $result.Found = $true
+            $result.Path = $cmd.Source
+            $result.Source = 'PATH'
+        } else {
+            $processPwsh = Join-Path $PSHOME "pwsh.exe"
+            if (Test-Path $processPwsh) {
+                $result.Found = $true
+                $result.Path = $processPwsh
+                $result.Source = 'current-process'
+                $result.Version = $PSVersionTable.PSVersion.ToString()
+            }
+        }
+    }
+
+    # Probe version when we haven't already taken it from the running process.
+    if ($result.Found -and -not $result.Version) {
+        try {
+            $versionOutput = & $result.Path -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' 2>$null | Select-Object -First 1
+            if ($versionOutput) {
+                $result.Version = "$versionOutput".Trim()
+            }
+        } catch {
+            # Version probe failed; leave Version as $null but keep Found = true
+        }
+    }
+
+    return $result
+}
+
+function Test-ClaudeCodeAvailable {
+    <#
+    .SYNOPSIS
+        Detects whether the Claude Code CLI is installed and on PATH
+    .DESCRIPTION
+        Informational only - Claude assets install regardless of whether the CLI
+        is present (mirrors the Neovim installer behaviour).
+    .OUTPUTS
+        Hashtable with Found (bool), Version (string or $null), Path (string or $null)
+    #>
+
+    $result = @{
+        Found = $false
+        Version = $null
+        Path = $null
+    }
+
+    $cmd = Get-Command claude -ErrorAction SilentlyContinue
+    if (-not $cmd) {
+        return $result
+    }
+
+    $result.Found = $true
+    $result.Path = $cmd.Source
+
+    try {
+        $versionOutput = & claude --version 2>$null | Select-Object -First 1
+        if ($versionOutput) {
+            $result.Version = "$versionOutput".Trim()
+        }
+    } catch {
+        # Version probe failed; leave Version as $null but keep Found = true
+    }
+
+    return $result
+}
+
 #endregion
 
 #region Configuration Data Model
@@ -315,6 +413,14 @@ function New-DevkitConfig {
         }
         Nvim = @{
             Install = $false
+        }
+        Claude = @{
+            Install         = $true   # parent gate for all Claude/herdr areas
+            InstallAgents   = $true
+            InstallSkills   = $true
+            InstallCommands = $true
+            InstallClaudeMd = $true
+            InstallHerdr    = $true   # settings.json hook merge + config.toml
         }
         InstallPath = ""
         BackupPath = ""
@@ -378,5 +484,5 @@ function Test-DevkitConfig {
 # - Test-EmailAddress, Read-ValidatedEmail
 # - Test-DirectoryPath, Read-ValidatedPath
 # - Test-NonEmptyString, Read-ValidatedName
-# - Test-NeovimAvailable
+# - Test-NeovimAvailable, Test-PwshAvailable, Test-ClaudeCodeAvailable
 # - New-DevkitConfig, Test-DevkitConfig

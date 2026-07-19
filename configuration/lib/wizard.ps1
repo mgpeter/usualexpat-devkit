@@ -13,7 +13,7 @@
 $script:WizardState = @{
     Mode = $null  # "Fresh" or "Update"
     CurrentStep = 0
-    TotalSteps = 9
+    TotalSteps = 10
     Config = @{
         RepoLocations = @()
         Git = @{
@@ -110,7 +110,7 @@ function Show-StepHeader {
         [Parameter(Mandatory)]
         [string]$StepTitle,
 
-        [int]$TotalSteps = 9
+        [int]$TotalSteps = 10
     )
 
     # Use escaped brackets for Spectre markup - [[ and ]] render as literal [ and ]
@@ -293,7 +293,7 @@ function Show-RepoLocationsStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 2 -StepTitle "Repository Locations" -TotalSteps 9
+    Show-StepHeader -StepNumber 2 -StepTitle "Repository Locations" -TotalSteps 10
 
     Write-SpectreHost "Where do you store your code repositories?"
     Write-SpectreHost "[dim]These paths will be used for Git profile directory matching.[/]"
@@ -532,7 +532,7 @@ function Show-GitConfigStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 3 -StepTitle "Git Configuration" -TotalSteps 9
+    Show-StepHeader -StepNumber 3 -StepTitle "Git Configuration" -TotalSteps 10
 
     Write-SpectreHost "Configure your Git identity for commits."
     Write-SpectreHost "[dim]This sets your default name and email for all repositories.[/]"
@@ -725,7 +725,7 @@ function Show-GitEditorStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 4 -StepTitle "Git Editor" -TotalSteps 9
+    Show-StepHeader -StepNumber 4 -StepTitle "Git Editor" -TotalSteps 10
 
     Write-SpectreHost "Select the editor Git will use for commit messages and interactive operations."
     Write-SpectreHost "[dim]This is used when you run 'git commit' without -m, or during rebases.[/]"
@@ -863,7 +863,7 @@ function Show-PowerShellModulesStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 5 -StepTitle "PowerShell Modules" -TotalSteps 9
+    Show-StepHeader -StepNumber 5 -StepTitle "PowerShell Modules" -TotalSteps 10
 
     Write-SpectreHost "Select PowerShell modules to enhance your terminal experience."
     Write-SpectreHost "[dim]These modules add features like Git status, directory jumping, and icons.[/]"
@@ -1018,7 +1018,7 @@ function Show-OhMyPoshStep {
         [string]$DevkitRoot = ""
     )
 
-    Show-StepHeader -StepNumber 6 -StepTitle "Oh-My-Posh Theme" -TotalSteps 9
+    Show-StepHeader -StepNumber 6 -StepTitle "Oh-My-Posh Theme" -TotalSteps 10
 
     Write-SpectreHost "Select a theme for your terminal prompt."
     Write-SpectreHost "[dim]Oh-My-Posh provides beautiful, informative prompts with Git status and more.[/]"
@@ -1063,7 +1063,7 @@ function Show-NvimConfigStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 7 -StepTitle "Neovim Configuration" -TotalSteps 9
+    Show-StepHeader -StepNumber 7 -StepTitle "Neovim Configuration" -TotalSteps 10
 
     Write-SpectreHost "Install the bundled Neovim configuration (lazy.nvim + neo-tree + easy-dotnet)."
     Write-SpectreHost "[dim]Installs to `$env:LOCALAPPDATA\nvim\ - Neovim's standard Windows location.[/]"
@@ -1119,6 +1119,111 @@ function Show-NvimConfigStep {
     if ($Config.Nvim.Install) {
         Write-Host ""
         Write-SpectreHost "[green]Neovim configuration will be installed.[/]"
+    }
+
+    return $Config
+}
+
+#endregion
+
+#region Claude Code & Herdr Configuration Step
+
+function Show-ClaudeCodeStep {
+    <#
+    .SYNOPSIS
+        Wizard step for installing Claude Code assets and herdr configuration
+    .DESCRIPTION
+        Offers a parent gate plus per-area sub-toggles for agents, skills,
+        commands, CLAUDE.md, and herdr configuration. Assets install into
+        ~/.claude (and %APPDATA%\herdr for the herdr config) regardless of
+        whether the Claude CLI is on PATH.
+    .PARAMETER Config
+        Current DevkitConfig hashtable
+    .OUTPUTS
+        Updated configuration hashtable
+    #>
+    param(
+        [hashtable]$Config
+    )
+
+    Show-StepHeader -StepNumber 8 -StepTitle "Claude Code & Herdr" -TotalSteps 10
+
+    Write-SpectreHost "Install Claude Code assets (agents, skills, commands, CLAUDE.md) into `$env:USERPROFILE\.claude"
+    Write-SpectreHost "[dim]and the herdr terminal-multiplexer configuration (settings.json hook + %APPDATA%\herdr\config.toml).[/]"
+    Write-Host ""
+
+    # Ensure the Claude sub-hashtable exists even if config-loader didn't populate it
+    if (-not $Config.ContainsKey('Claude')) {
+        $Config.Claude = @{
+            Install = $false; InstallAgents = $false; InstallSkills = $false
+            InstallCommands = $false; InstallClaudeMd = $false; InstallHerdr = $false
+        }
+    }
+
+    # Detection display (informational)
+    $claude = Test-ClaudeCodeAvailable
+    if ($claude.Found) {
+        $versionText = if ($claude.Version) { $claude.Version } else { "(version unknown)" }
+        Write-SpectreHost "[green]Detected Claude Code $versionText at $($claude.Path)[/]"
+    } else {
+        Write-SpectreHost "[yellow]Claude Code CLI not on PATH.[/] [dim]Assets still install to ~/.claude.[/]"
+    }
+
+    $pwsh = Test-PwshAvailable
+    if ($pwsh.Found) {
+        Write-SpectreHost "[green]pwsh: $($pwsh.Path) [dim]($($pwsh.Source))[/][/]"
+    } else {
+        Write-SpectreHost "[yellow]pwsh not found - herdr default_shell will be left unset.[/]"
+    }
+
+    if ($Config._Detection -and $Config._Detection.ClaudeSettingsFound) {
+        Write-SpectreHost "[dim]Existing ~/.claude/settings.json detected; the herdr hook is merged without touching your other settings.[/]"
+    }
+    Write-Host ""
+
+    # Parent gate
+    $Config.Claude.Install = Read-SpectreConfirm -Prompt "Install Claude Code assets and herdr configuration?" -DefaultAnswer "y"
+    if (-not $Config.Claude.Install) {
+        $Config.Claude.InstallAgents = $false
+        $Config.Claude.InstallSkills = $false
+        $Config.Claude.InstallCommands = $false
+        $Config.Claude.InstallClaudeMd = $false
+        $Config.Claude.InstallHerdr = $false
+        Write-SpectreHost "[yellow]Skipping Claude Code & herdr configuration.[/]"
+        return $Config
+    }
+
+    Write-Host ""
+    Write-SpectreHost "[cyan]Select areas to install:[/]"
+    Write-SpectreHost "[dim]Use Space to toggle, Enter to confirm.[/]"
+    Write-Host ""
+
+    # Map labels -> config keys
+    $areas = [ordered]@{
+        "Agents (subagents)"                 = "InstallAgents"
+        "Skills (herdr, spin-up-herd)"       = "InstallSkills"
+        "Commands (slash commands)"          = "InstallCommands"
+        "CLAUDE.md (global instructions)"    = "InstallClaudeMd"
+        "Herdr configuration (settings hook + config.toml)" = "InstallHerdr"
+    }
+
+    $selected = Read-SpectreMultiSelection `
+        -Title "Claude Code & Herdr" `
+        -Choices ([string[]]$areas.Keys) `
+        -AllowEmpty
+
+    foreach ($label in $areas.Keys) {
+        $Config.Claude[$areas[$label]] = ($selected -contains $label)
+    }
+
+    Write-Host ""
+    $anySelected = $Config.Claude.InstallAgents -or $Config.Claude.InstallSkills -or
+                   $Config.Claude.InstallCommands -or $Config.Claude.InstallClaudeMd -or
+                   $Config.Claude.InstallHerdr
+    if ($anySelected) {
+        Write-SpectreHost "[green]Selected Claude Code / herdr areas will be installed.[/]"
+    } else {
+        Write-SpectreHost "[yellow]No Claude areas selected; nothing will be installed.[/]"
     }
 
     return $Config
@@ -1247,6 +1352,61 @@ function Invoke-Installation {
             }
         }
         @{
+            Name = "Installing Claude agents"
+            Action = {
+                if (-not ($Config.Claude -and $Config.Claude.InstallAgents)) {
+                    Write-SpectreHost "  [dim](skipped - not selected)[/]"
+                    return $true
+                }
+                $p = Copy-DevkitClaudeAgents -SourceRoot $SourceRoot
+                return ($null -ne $p -and $p -ne "")
+            }
+        }
+        @{
+            Name = "Installing Claude skills"
+            Action = {
+                if (-not ($Config.Claude -and $Config.Claude.InstallSkills)) {
+                    Write-SpectreHost "  [dim](skipped - not selected)[/]"
+                    return $true
+                }
+                $p = Copy-DevkitClaudeSkills -SourceRoot $SourceRoot
+                return ($null -ne $p -and $p -ne "")
+            }
+        }
+        @{
+            Name = "Installing Claude commands"
+            Action = {
+                if (-not ($Config.Claude -and $Config.Claude.InstallCommands)) {
+                    Write-SpectreHost "  [dim](skipped - not selected)[/]"
+                    return $true
+                }
+                $p = Copy-DevkitClaudeCommands -SourceRoot $SourceRoot
+                return ($null -ne $p -and $p -ne "")
+            }
+        }
+        @{
+            Name = "Installing CLAUDE.md"
+            Action = {
+                if (-not ($Config.Claude -and $Config.Claude.InstallClaudeMd)) {
+                    Write-SpectreHost "  [dim](skipped - not selected)[/]"
+                    return $true
+                }
+                return Copy-DevkitClaudeMd -SourceRoot $SourceRoot
+            }
+        }
+        @{
+            Name = "Configuring herdr (settings hook + config.toml)"
+            Action = {
+                if (-not ($Config.Claude -and $Config.Claude.InstallHerdr)) {
+                    Write-SpectreHost "  [dim](skipped - not selected)[/]"
+                    return $true
+                }
+                $ok1 = Install-HerdrHookAndSettings -SourceRoot $SourceRoot
+                $ok2 = Save-HerdrConfig -SourceRoot $SourceRoot
+                return ($ok1 -and $ok2)
+            }
+        }
+        @{
             Name = "Cleaning up old backups"
             Action = {
                 Invoke-BackupCleanup -KeepCount 5 | Out-Null
@@ -1323,7 +1483,7 @@ function Show-InstallationStep {
         [string]$DevkitRoot
     )
 
-    Show-StepHeader -StepNumber 9 -StepTitle "Installing" -TotalSteps 9
+    Show-StepHeader -StepNumber 10 -StepTitle "Installing" -TotalSteps 10
 
     Write-SpectreHost "Applying your configuration..."
     Write-Host ""
@@ -1397,6 +1557,20 @@ function Show-ConfigurationSummary {
         [PSCustomObject]@{ Setting = "Install devkit nvim config"; Value = $nvimInstall }
     )
     $nvimData | Format-SpectreTable -Border Rounded -Color Blue | Out-Host
+
+    # Claude Code & Herdr
+    Write-Host ""
+    Write-SpectreHost "[blue]Claude Code & Herdr:[/]"
+    $yn = { param($b) if ($b) { "Yes" } else { "No (skipped)" } }
+    $claude = $Config.Claude
+    $claudeData = @(
+        [PSCustomObject]@{ Setting = "Agents";   Value = (& $yn ($claude -and $claude.InstallAgents)) }
+        [PSCustomObject]@{ Setting = "Skills";    Value = (& $yn ($claude -and $claude.InstallSkills)) }
+        [PSCustomObject]@{ Setting = "Commands";  Value = (& $yn ($claude -and $claude.InstallCommands)) }
+        [PSCustomObject]@{ Setting = "CLAUDE.md"; Value = (& $yn ($claude -and $claude.InstallClaudeMd)) }
+        [PSCustomObject]@{ Setting = "Herdr config"; Value = (& $yn ($claude -and $claude.InstallHerdr)) }
+    )
+    $claudeData | Format-SpectreTable -Border Rounded -Color Blue | Out-Host
 }
 
 function Show-CompletionMessage {
@@ -1494,8 +1668,11 @@ function Start-Wizard {
     # Step 7: Neovim Configuration
     $script:WizardState.Config = Show-NvimConfigStep -Config $script:WizardState.Config
 
+    # Step 8: Claude Code & Herdr
+    $script:WizardState.Config = Show-ClaudeCodeStep -Config $script:WizardState.Config
+
     # Confirmation step
-    Show-StepHeader -StepNumber 8 -StepTitle "Review Configuration" -TotalSteps 9
+    Show-StepHeader -StepNumber 9 -StepTitle "Review Configuration" -TotalSteps 10
 
     # Use fully collected config
     $displayConfig = @{
@@ -1503,6 +1680,7 @@ function Start-Wizard {
         Git = $script:WizardState.Config.Git
         PowerShell = $script:WizardState.Config.PowerShell
         Nvim = $script:WizardState.Config.Nvim
+        Claude = $script:WizardState.Config.Claude
     }
 
     Show-ConfigurationSummary -Config $displayConfig

@@ -126,6 +126,52 @@ function Backup-NvimConfig {
     }
 }
 
+function Backup-ClaudeConfig {
+    <#
+    .SYNOPSIS
+        Backs up the Claude Code assets the installer may overwrite
+    .DESCRIPTION
+        Copies only the assets devkit touches - agents/, skills/, commands/,
+        CLAUDE.md and settings.json - into a timestamped subdirectory under the
+        backup root. Deliberately does NOT copy the whole ~/.claude tree, which
+        holds sessions, cache, history and projects. Returns $null if no
+        ~/.claude exists or nothing was backed up.
+    .OUTPUTS
+        String - Path to the backup directory, or $null
+    #>
+
+    $claudeRoot = Join-Path $env:USERPROFILE ".claude"
+
+    if (-not (Test-Path $claudeRoot)) {
+        Write-Verbose "No ~/.claude directory found, skipping backup"
+        return $null
+    }
+
+    $items = @("agents", "skills", "commands", "CLAUDE.md", "settings.json")
+    $present = $items | Where-Object { Test-Path (Join-Path $claudeRoot $_) }
+
+    if (-not $present) {
+        Write-Verbose "No managed Claude assets present, skipping backup"
+        return $null
+    }
+
+    $backupDir = Initialize-BackupDirectory
+    $timestamp = Get-Date -Format "yyyy-MM-dd_HHmmss"
+    $backupPath = Join-Path $backupDir "claude_${timestamp}"
+
+    try {
+        New-Item -Path $backupPath -ItemType Directory -Force | Out-Null
+        foreach ($item in $present) {
+            Copy-Item -Path (Join-Path $claudeRoot $item) -Destination $backupPath -Recurse -Force
+        }
+        Write-Verbose "Backed up Claude assets: $claudeRoot -> $backupPath"
+        return $backupPath
+    } catch {
+        Write-Warning "Failed to backup Claude config: $_"
+        return $null
+    }
+}
+
 function Backup-AllConfigFiles {
     <#
     .SYNOPSIS
@@ -168,6 +214,15 @@ function Backup-AllConfigFiles {
         $results.Backups += @{
             Original = (Join-Path $env:LOCALAPPDATA "nvim")
             Backup = $nvimBackup
+        }
+    }
+
+    # Back up managed Claude assets if present
+    $claudeBackup = Backup-ClaudeConfig
+    if ($claudeBackup) {
+        $results.Backups += @{
+            Original = (Join-Path $env:USERPROFILE ".claude")
+            Backup = $claudeBackup
         }
     }
 
@@ -290,7 +345,8 @@ function Invoke-BackupCleanup {
         [int]$KeepCount = 5
     )
 
-    $backupTypes = @("gitconfig", "powershell-profile", "gitconfig-profile", "nvim")
+    $backupTypes = @("gitconfig", "powershell-profile", "gitconfig-profile", "nvim",
+        "claude", "claude-md", "claude-settings", "herdr-config")
 
     $totalRemoved = 0
     foreach ($type in $backupTypes) {
@@ -365,7 +421,7 @@ function Get-LatestBackup {
 
 # Functions exported when dot-sourced:
 # - Initialize-BackupDirectory, Get-BackupDirectory
-# - Backup-ConfigFile, Backup-AllConfigFiles, Backup-NvimConfig
+# - Backup-ConfigFile, Backup-AllConfigFiles, Backup-NvimConfig, Backup-ClaudeConfig
 # - Clear-TerminalIconsCache
 # - Get-BackupFiles, Remove-OldBackups, Invoke-BackupCleanup
 # - Restore-ConfigFile, Get-LatestBackup

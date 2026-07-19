@@ -1,0 +1,4 @@
+# Shell scripts must stay LF or bash breaks on checkout.
+# The repo has core.autocrlf enabled, so pin *.sh explicitly.
+*.sh text eol=lf
+configuration/claude/skills/**/*.sh text eol=lf

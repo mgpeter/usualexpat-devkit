@@ -209,6 +209,54 @@ function Get-ExistingNvimConfig {
 
 #endregion
 
+#region Claude Code Detection
+
+function Get-ExistingClaudeConfig {
+    <#
+    .SYNOPSIS
+        Detects existing Claude Code / herdr configuration
+    .OUTPUTS
+        Hashtable with Found, ClaudeMdFound, SettingsFound, HerdrHookPresent,
+        HerdrConfigFound, ClaudeInstalled
+    #>
+
+    $result = @{
+        Found = $false
+        ClaudeMdFound = $false
+        SettingsFound = $false
+        HerdrHookPresent = $false
+        HerdrConfigFound = $false
+        ClaudeInstalled = $false
+    }
+
+    $claudeRoot = Join-Path $env:USERPROFILE ".claude"
+    $result.Found = Test-Path $claudeRoot
+    $result.ClaudeMdFound = Test-Path (Join-Path $claudeRoot "CLAUDE.md")
+    $result.HerdrConfigFound = Test-Path (Join-Path $env:APPDATA "herdr\config.toml")
+
+    $settingsPath = Join-Path $claudeRoot "settings.json"
+    if (Test-Path $settingsPath) {
+        $result.SettingsFound = $true
+        try {
+            $raw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
+            if ($raw -and $raw -match 'herdr-agent-state\.ps1') {
+                $result.HerdrHookPresent = $true
+            }
+        } catch {
+            Write-Warning "Error parsing Claude settings.json: $_"
+        }
+    }
+
+    # Claude CLI on PATH (informational)
+    if (Get-Command Test-ClaudeCodeAvailable -ErrorAction SilentlyContinue) {
+        $result.ClaudeInstalled = (Test-ClaudeCodeAvailable).Found
+    }
+
+    return $result
+}
+
+#endregion
+
 #region Devkit Variables Detection
 
 function Get-ExistingDevkitVariables {
@@ -350,12 +398,26 @@ function Get-ExistingConfiguration {
             ExistingPluginManager = $null
             ExistingIsDevkitManaged = $false
         }
+        Claude = @{
+            Install         = $true
+            InstallAgents   = $true
+            InstallSkills   = $true
+            InstallCommands = $true
+            InstallClaudeMd = $true
+            InstallHerdr    = $true
+        }
         _Detection = @{
             GitConfigFound = $false
             ProfileFound = $false
             DevkitInstalled = $false
             VariablesFound = $false
             NvimConfigFound = $false
+            ClaudeFound = $false
+            ClaudeInstalled = $false
+            ClaudeMdFound = $false
+            ClaudeSettingsFound = $false
+            HerdrHookPresent = $false
+            HerdrConfigFound = $false
         }
     }
 
@@ -387,6 +449,15 @@ function Get-ExistingConfiguration {
         $config.Nvim.ExistingIsDevkitManaged = $nvimConfig.IsDevkitManaged
     }
 
+    # Load Claude Code / herdr detection
+    $claudeConfig = Get-ExistingClaudeConfig
+    $config._Detection.ClaudeFound = $claudeConfig.Found
+    $config._Detection.ClaudeInstalled = $claudeConfig.ClaudeInstalled
+    $config._Detection.ClaudeMdFound = $claudeConfig.ClaudeMdFound
+    $config._Detection.ClaudeSettingsFound = $claudeConfig.SettingsFound
+    $config._Detection.HerdrHookPresent = $claudeConfig.HerdrHookPresent
+    $config._Detection.HerdrConfigFound = $claudeConfig.HerdrConfigFound
+
     # Load Devkit variables
     $devkitVars = Get-ExistingDevkitVariables -DevkitRoot $DevkitRoot
     $config._Detection.VariablesFound = $devkitVars.Found
@@ -415,6 +486,7 @@ function Get-ExistingConfiguration {
 # - Get-ExistingGitConfig
 # - Get-ExistingPowerShellConfig
 # - Get-ExistingNvimConfig
+# - Get-ExistingClaudeConfig
 # - Get-ExistingDevkitVariables
 # - Get-CommonRepoLocations
 # - Get-ExistingConfiguration

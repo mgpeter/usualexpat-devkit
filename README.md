@@ -6,7 +6,8 @@ This repository provides a **pragmatic, versatile, and visually appealing** conf
 
 - **Git** – Streamlined config with useful aliases and signing setup  
 - **PowerShell** – Custom profiles, productivity scripts, and automation  
-- **Windows Terminal** – Beautiful themes, shortcuts, and profiles
+- **Windows Terminal** – Beautiful themes, shortcuts, and profiles  
+- **Claude Code & Herdr** – Optionally install Claude agents, skills, commands, and global `CLAUDE.md`, plus the herdr terminal-multiplexer configuration
 
 Everything is designed to be **easy to set up, powerful, and visually refined**.
 
@@ -17,6 +18,32 @@ Everything is designed to be **easy to set up, powerful, and visually refined**.
 ---
 
 ## How
+
+### Prerequisites
+
+Install these **before** running the wizard. [winget](https://learn.microsoft.com/windows/package-manager/winget/) is preferred (it ships with Windows 11); direct installers are listed where the tool exposes one. **Open a new terminal after installing** so `PATH` updates take effect — each installer adds its own binary to `PATH` (see [A note on PATH](#a-note-on-path)).
+
+**Required**
+
+| Tool | Why | Install |
+| --- | --- | --- |
+| PowerShell 7+ | The wizard and generated profile require it (`#Requires -Version 7.0`) | `winget install --id Microsoft.PowerShell -e` |
+| Git | Git config generation + aliases | `winget install --id Git.Git -e` |
+| Oh My Posh | The profile calls `oh-my-posh` by name to render the prompt | `winget install --id JanDeDobbeleer.OhMyPosh -e` |
+| A Nerd Font | Glyphs/icons in the prompt and Terminal-Icons | `oh-my-posh font install meslo` (after installing Oh My Posh), then set it as your terminal font |
+
+> `PwshSpectreConsole` (the wizard UI) and the selected PowerShell modules (`z`, `posh-git`, `Terminal-Icons`, `PSReadLine`, …) are installed automatically from the PowerShell Gallery — no manual step and no `PATH` change.
+
+**Optional (only if you enable the matching feature)**
+
+| Tool | Needed for | Install |
+| --- | --- | --- |
+| Neovim | The bundled Neovim config, or Neovim as the Git editor | `winget install --id Neovim.Neovim -e` |
+| Node.js | General dev workflows (and npm-based Claude Code install) | `winget install --id OpenJS.NodeJS.LTS -e` |
+| Claude Code CLI | Using the Claude agents/skills/commands the wizard installs into `~/.claude` | Native (recommended): `irm https://claude.ai/install.ps1 \| iex` (installs to `%USERPROFILE%\.local\bin`) &nbsp;·&nbsp; or npm: `npm install -g @anthropic-ai/claude-code` |
+| Herdr | Using the herdr terminal-multiplexer configuration/skill | Windows: see [herdr.dev](https://herdr.dev) (installs to `%LOCALAPPDATA%\Programs\Herdr\bin`) &nbsp;·&nbsp; macOS/Linux: `brew install herdr` or `curl -fsSL https://herdr.dev/install.sh \| sh` |
+
+> The wizard installs the Claude assets to `~/.claude` and writes the herdr config to `%APPDATA%\herdr` **regardless** of whether the Claude Code / Herdr binaries are present — but you need the respective CLI installed to actually use them.
 
 ### Installation & Setup
 
@@ -41,6 +68,8 @@ Everything is designed to be **easy to set up, powerful, and visually refined**.
    - **Git Editor** - Pick your commit message editor (VS Code, Neovim, Vim, Notepad++, Nano, or custom)
    - **PowerShell Modules** - Choose which modules to install (z, posh-git, Terminal-Icons, etc.)
    - **Oh-My-Posh Theme** - Select your terminal theme
+   - **Neovim Configuration** - Optionally install the bundled Neovim config
+   - **Claude Code & Herdr** - Optionally install Claude agents, skills, commands, and `CLAUDE.md` into `~/.claude`, plus the herdr configuration (each area is individually toggleable)
 
    The wizard automatically:
    - Backs up your existing configuration files
@@ -48,8 +77,30 @@ Everything is designed to be **easy to set up, powerful, and visually refined**.
    - Creates directory-specific Git profiles (e.g., different email for work repos)
    - Updates your PowerShell profile
    - Installs selected modules
+   - Installs the selected Claude Code assets and merges the herdr `SessionStart` hook into `~/.claude/settings.json` without touching your other settings
+   - Discovers the installed PowerShell 7 (`pwsh`) path and writes it into `%APPDATA%\herdr\config.toml`
 
 3. **Restart your terminal and enjoy!**
+
+### A note on PATH
+
+**The devkit installer does not modify your `PATH`.** It writes configuration to `~/.devkit`, `~/.claude`, and `%APPDATA%\herdr` — all of which are loaded by your PowerShell profile (`$PROFILE`) or read directly by the tools, so none of them require `PATH` entries. PowerShell modules install into the module path, not `PATH`.
+
+What *does* need to be on `PATH` is the [prerequisite tools](#prerequisites) — and each tool's own installer adds itself:
+
+| Tool | Location its installer adds to `PATH` |
+| --- | --- |
+| `pwsh` | `%LOCALAPPDATA%\Microsoft\WindowsApps` (Store/winget alias) |
+| `oh-my-posh` | `%LOCALAPPDATA%\Programs\oh-my-posh\bin` |
+| `git` | `C:\Program Files\Git\cmd` |
+| `nvim` | `C:\Program Files\Neovim\bin` |
+| `claude` | `%USERPROFILE%\.local\bin` (native install) |
+| `herdr` | `%LOCALAPPDATA%\Programs\Herdr\bin` |
+| `node` / `npm` | `C:\Program Files\nodejs` |
+
+Because the generated PowerShell profile calls `oh-my-posh` (and, if you set it as the Git editor, `nvim`) **by name**, make sure those are on `PATH` before your first new session — i.e. **open a fresh terminal after installing the prerequisites** so the updated `PATH` is picked up, then run the wizard.
+
+> Herdr, by design, pins its shell to the **App Execution Alias** `pwsh` shim (`%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`) rather than a version-stamped path, so it survives PowerShell updates. The wizard detects this automatically.
 
 ### PowerShell Features
 
@@ -299,3 +350,9 @@ Whether you're a **beginner looking for a strong starting point** or a **seasone
   - ✔️ Oh-My-Posh theme selection
   - ✔️ Automatic backup of existing configs
   - ✔️ Update mode for existing installations
+
+- ✔️ Claude Code & Herdr integration **[DONE]**
+
+  - ✔️ Install Claude agents, skills, commands, and global `CLAUDE.md` into `~/.claude` (each area toggleable)
+  - ✔️ Idempotent merge of the herdr `SessionStart` hook into `~/.claude/settings.json`
+  - ✔️ Auto-discovery of the installed `pwsh` path for `%APPDATA%\herdr\config.toml`
