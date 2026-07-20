@@ -102,6 +102,26 @@ Because the generated PowerShell profile calls `oh-my-posh` (and, if you set it 
 
 > Herdr, by design, pins its shell to the **App Execution Alias** `pwsh` shim (`%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`) rather than a version-stamped path, so it survives PowerShell updates. The wizard detects this automatically.
 
+### The `devkit` CLI
+
+After installation, an in-shell `devkit` command is auto-loaded by your PowerShell profile (from `~/.devkit/devkit.ps1`). It's the discovery and management surface for everything the devkit installs — inventory, health checks, and refresh/restore helpers — and it uses plain `Write-Host` (no heavy modules) so it adds no shell-start cost. Tab completion is wired for every subcommand.
+
+| Command | What it does |
+| --- | --- |
+| `devkit help [topic]` | Full inventory, or one section: `modules`, `aliases`, `keymaps`, `functions`, `git`, `nvim`, `claude`, `herdr`, `env`, `commands` |
+| `devkit version` | Devkit version + install paths |
+| `devkit doctor` | Health checks: profile wiring, modules, tools on `PATH`, nvim/OMP config, **and the Claude/Herdr install** (`~/.claude/CLAUDE.md`, the herdr `SessionStart` hook, the hook script, and `%APPDATA%\herdr\config.toml`) |
+| `devkit find <keyword>` | Search the whole inventory — modules, aliases, keybindings, functions, git aliases, nvim keymaps, and bundled Claude agents/commands/skills |
+| `devkit update` | Re-run the installation wizard |
+| `devkit nvim refresh` | Re-copy the bundled Neovim config |
+| `devkit claude refresh` | Re-copy the bundled Claude assets into `~/.claude` (agents, commands, skills, `CLAUDE.md`, herdr hook) |
+| `devkit herdr refresh` | Re-write `%APPDATA%\herdr\config.toml` |
+| `devkit backups list` | List timestamped backups in `~/.devkit/backups/` |
+| `devkit backups restore <name>` | Restore a backup; the destination is inferred from the name (nvim, gitconfig, PowerShell profile, `CLAUDE.md`, `settings.json`, herdr `config.toml`, or a `~/.claude` snapshot merged in non-destructively) |
+| `devkit fix terminal-icons` | Purge a corrupt Terminal-Icons icon cache |
+
+> `devkit help` shows a live ✓/✗ next to each Claude/Herdr asset so you can see at a glance what is installed. The `refresh` commands and `backups restore` read the repo path from `$env:DEVKIT_REPO_ROOT` (recorded at install time); if the repo has moved, they print a clear error and everything else keeps working.
+
 ### PowerShell Features
 
 The DevKit includes a powerful set of PowerShell features to enhance your development workflow:
@@ -356,3 +376,9 @@ Whether you're a **beginner looking for a strong starting point** or a **seasone
   - ✔️ Install Claude agents, skills, commands, and global `CLAUDE.md` into `~/.claude` (each area toggleable)
   - ✔️ Idempotent merge of the herdr `SessionStart` hook into `~/.claude/settings.json`
   - ✔️ Auto-discovery of the installed `pwsh` path for `%APPDATA%\herdr\config.toml`
+
+- ✔️ In-shell `devkit` CLI **[DONE]**
+
+  - ✔️ Inventory + search (`help`, `find`) over modules, aliases, keybindings, functions, nvim keymaps, and Claude/Herdr assets
+  - ✔️ Health checks (`doctor`) covering the PowerShell, Neovim, and Claude/Herdr installs
+  - ✔️ Refresh helpers (`nvim`/`claude`/`herdr refresh`) and name-inferred backup restore

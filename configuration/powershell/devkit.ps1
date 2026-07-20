@@ -70,13 +70,40 @@ $script:DevkitRegistry = @{
         @{ Key = '<leader>do'; Description = 'easy-dotnet: outdated packages' }
     )
 
+    # Claude Code + Herdr assets bundled by the installer (a051f98). Installed to
+    # ~/.claude/ (agents|commands|skills|CLAUDE.md|hooks + a settings.json hook)
+    # and %APPDATA%\herdr\config.toml. These are hand-maintained; keep in sync
+    # with configuration/claude/* and configuration/herdr/config.toml.
+    ClaudeHerdr = @(
+        @{ Name = 'CLAUDE.md';                 Kind = 'claude';      Description = 'Global Claude Code instructions -> ~/.claude/CLAUDE.md' }
+        @{ Name = 'architect';                 Kind = 'agent';       Description = 'Subagent: plan/design software projects' }
+        @{ Name = 'code-reviewer';             Kind = 'agent';       Description = 'Subagent: quality/security/maintainability review' }
+        @{ Name = 'context-fetcher';           Kind = 'agent';       Description = 'Subagent: extract relevant info from docs' }
+        @{ Name = 'context-manager';           Kind = 'agent';       Description = 'Subagent: coordinate multi-agent context' }
+        @{ Name = 'debugger';                  Kind = 'agent';       Description = 'Subagent: root-cause errors and test failures' }
+        @{ Name = 'sdk-research-specialist';   Kind = 'agent';       Description = 'Subagent: deep SDK/library documentation research' }
+        @{ Name = 'terraform-specialist';      Kind = 'agent';       Description = 'Subagent: Terraform modules and IaC' }
+        @{ Name = 'test-automator';            Kind = 'agent';       Description = 'Subagent: build unit/integration/e2e test suites' }
+        @{ Name = 'test-runner';               Kind = 'agent';       Description = 'Subagent: run tests and analyze failures' }
+        @{ Name = 'analyze-product';           Kind = 'command';     Description = 'Slash command: analyze the current product' }
+        @{ Name = 'create-spec';               Kind = 'command';     Description = 'Slash command: spec creation workflow' }
+        @{ Name = 'execute-tasks';             Kind = 'command';     Description = 'Slash command: execute planned tasks' }
+        @{ Name = 'plan-product';              Kind = 'command';     Description = 'Slash command: product planning workflow' }
+        @{ Name = 'herdr';                     Kind = 'skill';       Description = 'Skill: herdr CLI reference (tmux for AI agents)' }
+        @{ Name = 'spin-up-herd';              Kind = 'skill';       Description = 'Skill: fan a herd of Claude agents into a tab' }
+        @{ Name = 'herdr SessionStart hook';   Kind = 'integration'; Description = 'Reports Claude sessions to Herdr panes (settings.json)' }
+        @{ Name = 'Herdr config.toml';         Kind = 'integration'; Description = 'Herdr app config -> %APPDATA%\herdr\config.toml' }
+    )
+
     Commands = @(
-        @{ Name = 'devkit help [topic]';            Description = 'This help, or one section (modules|aliases|keymaps|functions|git|nvim|env|commands)' }
+        @{ Name = 'devkit help [topic]';            Description = 'This help, or one section (modules|aliases|keymaps|functions|git|nvim|claude|herdr|env|commands)' }
         @{ Name = 'devkit version';                 Description = 'Devkit version + install paths' }
         @{ Name = 'devkit doctor';                  Description = 'Run health checks' }
         @{ Name = 'devkit find <keyword>';          Description = 'Search inventory for matching rows' }
         @{ Name = 'devkit update';                  Description = 'Re-run install.ps1 (re-launches the wizard)' }
         @{ Name = 'devkit nvim refresh';            Description = 'Re-copy the bundled Neovim config' }
+        @{ Name = 'devkit claude refresh';          Description = 'Re-copy bundled Claude Code assets into ~/.claude' }
+        @{ Name = 'devkit herdr refresh';           Description = 'Re-write %APPDATA%\herdr\config.toml' }
         @{ Name = 'devkit backups list';            Description = 'List ~/.devkit/backups/' }
         @{ Name = 'devkit backups restore <name>';  Description = 'Restore a backup file or directory' }
         @{ Name = 'devkit fix terminal-icons';      Description = 'Purge corrupt Terminal-Icons CLIXML cache' }
@@ -207,6 +234,37 @@ function _Devkit-PrintCommands {
     }
 }
 
+function _Devkit-ClaudeHerdrPresence {
+    # Live ✓/✗ for each registry row's Kind (installed by a051f98's installer).
+    param([Parameter(Mandatory)]$Row)
+    $claudeRoot = Join-Path $env:USERPROFILE '.claude'
+    switch ($Row.Kind) {
+        'claude'      { return (Test-Path (Join-Path $claudeRoot 'CLAUDE.md')) }
+        'agent'       { return (Test-Path (Join-Path $claudeRoot "agents\$($Row.Name).md")) }
+        'command'     { return (Test-Path (Join-Path $claudeRoot "commands\$($Row.Name).md")) }
+        'skill'       { return (Test-Path (Join-Path $claudeRoot "skills\$($Row.Name)")) }
+        'integration' {
+            if ($Row.Name -match 'config\.toml') {
+                return (Test-Path (Join-Path $env:APPDATA 'herdr\config.toml'))
+            }
+            return (Test-Path (Join-Path $claudeRoot 'hooks\herdr-agent-state.ps1'))
+        }
+        default { return $false }
+    }
+}
+
+function _Devkit-PrintClaudeHerdr {
+    _Devkit-WriteSection "CLAUDE / HERDR"
+    foreach ($r in $script:DevkitRegistry.ClaudeHerdr) {
+        $present = _Devkit-ClaudeHerdrPresence $r
+        $marker = if ($present) { '✓' } else { '✗' }
+        $color = if ($present) { 'Green' } else { 'DarkGray' }
+        Write-Host "  $marker " -ForegroundColor $color -NoNewline
+        _Devkit-WriteRow -Left $r.Name -Right $r.Description -Pad 24
+    }
+    _Devkit-WriteDim "  (✓ installed / ✗ not found)  refresh with: devkit claude refresh | devkit herdr refresh"
+}
+
 #endregion
 
 #region Subcommand: help
@@ -226,6 +284,7 @@ function Show-DevkitHelp {
         _Devkit-PrintFunctions
         _Devkit-PrintGitAliases
         _Devkit-PrintNvimKeymaps
+        _Devkit-PrintClaudeHerdr
         _Devkit-PrintEnv
         _Devkit-PrintCommands
         Write-Host ""
@@ -239,11 +298,13 @@ function Show-DevkitHelp {
         'functions' { _Devkit-PrintFunctions }
         'git'       { _Devkit-PrintGitAliases }
         'nvim'      { _Devkit-PrintNvimKeymaps }
+        'claude'    { _Devkit-PrintClaudeHerdr }
+        'herdr'     { _Devkit-PrintClaudeHerdr }
         'env'       { _Devkit-PrintEnv }
         'commands'  { _Devkit-PrintCommands }
         default {
             Write-Warning "Unknown topic: $Topic"
-            Write-Host "  Topics: modules, aliases, keymaps, functions, git, nvim, env, commands" -ForegroundColor DarkGray
+            Write-Host "  Topics: modules, aliases, keymaps, functions, git, nvim, claude, herdr, env, commands" -ForegroundColor DarkGray
         }
     }
     Write-Host ""
@@ -384,8 +445,9 @@ function Invoke-DevkitDoctor {
         _Devkit-CheckResult WARN 'Oh-My-Posh theme not set' -Hint 'Run: devkit update'
     }
 
-    # 7. Required tools on PATH
-    foreach ($tool in @('git', 'nvim', 'oh-my-posh')) {
+    # 7. Required tools on PATH (claude/herdr are optional external apps the
+    # devkit only configures - assets install regardless of whether they're on PATH)
+    foreach ($tool in @('git', 'nvim', 'oh-my-posh', 'claude', 'herdr')) {
         $cmd = Get-Command $tool -ErrorAction SilentlyContinue
         if ($cmd) {
             _Devkit-CheckResult OK "$tool on PATH" -Detail $cmd.Source
@@ -394,6 +456,8 @@ function Invoke-DevkitDoctor {
                 'nvim'       { 'winget install Neovim.Neovim' }
                 'oh-my-posh' { 'winget install JanDeDobbeleer.OhMyPosh' }
                 'git'        { 'winget install Git.Git' }
+                'claude'     { 'Optional: install Claude Code to use the bundled agents/commands' }
+                'herdr'      { 'Optional: external multiplexer; the devkit only writes its config' }
             }
             _Devkit-CheckResult WARN "$tool not on PATH" -Hint $hint
         }
@@ -413,6 +477,44 @@ function Invoke-DevkitDoctor {
                 _Devkit-CheckResult FAIL "Module $($mod.Name) missing" -Hint "Install-Module $($mod.Name) -Scope CurrentUser"
             }
         }
+    }
+
+    # 9. Claude Code assets present (installed by the wizard into ~/.claude)
+    $claudeRoot = Join-Path $env:USERPROFILE '.claude'
+    $claudeMd = Join-Path $claudeRoot 'CLAUDE.md'
+    if (Test-Path $claudeMd) {
+        _Devkit-CheckResult OK '~/.claude/CLAUDE.md present'
+    } else {
+        _Devkit-CheckResult WARN '~/.claude/CLAUDE.md missing' -Hint 'Run: devkit claude refresh'
+    }
+
+    # 10. Herdr SessionStart hook wired into settings.json
+    $claudeSettings = Join-Path $claudeRoot 'settings.json'
+    if (Test-Path $claudeSettings) {
+        $settingsRaw = Get-Content $claudeSettings -Raw -ErrorAction SilentlyContinue
+        if ($settingsRaw -match 'herdr-agent-state\.ps1') {
+            _Devkit-CheckResult OK 'Herdr SessionStart hook wired in settings.json'
+        } else {
+            _Devkit-CheckResult WARN 'settings.json present but Herdr hook not wired' -Hint 'Run: devkit claude refresh'
+        }
+    } else {
+        _Devkit-CheckResult WARN '~/.claude/settings.json missing' -Hint 'Run: devkit claude refresh'
+    }
+
+    # 11. Herdr hook script installed
+    $herdrHook = Join-Path $claudeRoot 'hooks\herdr-agent-state.ps1'
+    if (Test-Path $herdrHook) {
+        _Devkit-CheckResult OK 'Herdr hook script present' -Detail 'hooks\herdr-agent-state.ps1'
+    } else {
+        _Devkit-CheckResult WARN 'Herdr hook script missing' -Hint 'Run: devkit claude refresh'
+    }
+
+    # 12. Herdr config.toml present
+    $herdrConfig = Join-Path $env:APPDATA 'herdr\config.toml'
+    if (Test-Path $herdrConfig) {
+        _Devkit-CheckResult OK 'Herdr config.toml present' -Detail $herdrConfig
+    } else {
+        _Devkit-CheckResult WARN 'Herdr config.toml missing' -Hint 'Run: devkit herdr refresh'
     }
 
     Write-Host ""
@@ -485,6 +587,14 @@ function Find-DevkitEntry {
         $anyHits = $true
         _Devkit-WriteSection "NVIM KEYMAPS"
         foreach ($r in $hits) { _Devkit-WriteRow -Left $r.Key -Right $r.Description -Pad 14 }
+    }
+
+    # Claude / Herdr assets
+    $hits = @($script:DevkitRegistry.ClaudeHerdr | Where-Object { _matchRow $_ @('Name', 'Kind', 'Description') })
+    if ($hits.Count) {
+        $anyHits = $true
+        _Devkit-WriteSection "CLAUDE / HERDR"
+        foreach ($r in $hits) { _Devkit-WriteRow -Left $r.Name -Right $r.Description -Pad 24 }
     }
 
     # Git aliases (live)
@@ -615,6 +725,79 @@ function Invoke-DevkitNvim {
 
 #endregion
 
+#region Subcommand: claude / herdr
+
+function _Devkit-ResolveGenerator {
+    # Shared guard + dot-source for the refresh commands that reuse the
+    # installer's copy helpers. Returns the config-generator.ps1 path, or $null.
+    if (-not $env:DEVKIT_REPO_ROOT -or -not (Test-Path $env:DEVKIT_REPO_ROOT)) {
+        Write-Host "ERROR: " -ForegroundColor Red -NoNewline
+        Write-Host '$env:DEVKIT_REPO_ROOT is not set or does not exist.'
+        return $null
+    }
+    $libPath = Join-Path $env:DEVKIT_REPO_ROOT 'configuration\lib\config-generator.ps1'
+    if (-not (Test-Path $libPath)) {
+        Write-Host "ERROR: " -ForegroundColor Red -NoNewline
+        Write-Host "config-generator.ps1 not found at: $libPath"
+        return $null
+    }
+    return $libPath
+}
+
+function Invoke-DevkitClaude {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string]$Action
+    )
+
+    switch ($Action) {
+        'refresh' {
+            $libPath = _Devkit-ResolveGenerator
+            if (-not $libPath) { return }
+            . $libPath
+
+            $root = $env:DEVKIT_REPO_ROOT
+            Copy-DevkitClaudeMd       -SourceRoot $root
+            Copy-DevkitClaudeAgents   -SourceRoot $root
+            Copy-DevkitClaudeSkills   -SourceRoot $root
+            Copy-DevkitClaudeCommands -SourceRoot $root
+            Install-HerdrHookAndSettings -SourceRoot $root
+
+            Write-Host "Refreshed Claude Code assets in " -NoNewline
+            Write-Host (Join-Path $env:USERPROFILE '.claude') -ForegroundColor Green
+        }
+        default {
+            Write-Warning "Usage: devkit claude refresh"
+        }
+    }
+}
+
+function Invoke-DevkitHerdr {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string]$Action
+    )
+
+    switch ($Action) {
+        'refresh' {
+            $libPath = _Devkit-ResolveGenerator
+            if (-not $libPath) { return }
+            . $libPath
+
+            Save-HerdrConfig -SourceRoot $env:DEVKIT_REPO_ROOT
+            Write-Host "Refreshed Herdr config at " -NoNewline
+            Write-Host (Join-Path $env:APPDATA 'herdr\config.toml') -ForegroundColor Green
+        }
+        default {
+            Write-Warning "Usage: devkit herdr refresh"
+        }
+    }
+}
+
+#endregion
+
 #region Subcommand: backups
 
 function _Devkit-GetBackupRoot {
@@ -699,8 +882,11 @@ function Invoke-DevkitBackups {
                 return
             }
 
-            # Infer destination
+            # Infer destination. $mergeIntoClaude marks the claude_<timestamp>
+            # snapshot, which is only a SUBSET of ~/.claude - it must be merged
+            # in, never delete-and-replaced (that would wipe sessions/projects).
             $dest = $null
+            $mergeIntoClaude = $false
             switch -Regex ($match.Name) {
                 '^nvim_'                 { $dest = Join-Path $env:LOCALAPPDATA 'nvim'; break }
                 '^gitconfig_'            { $dest = Join-Path $env:USERPROFILE '.gitconfig'; break }
@@ -709,6 +895,14 @@ function Invoke-DevkitBackups {
                     break
                 }
                 '^powershell-profile_'   { $dest = $PROFILE; break }
+                '^claude-md_'            { $dest = Join-Path $env:USERPROFILE '.claude\CLAUDE.md'; break }
+                '^claude-settings_'      { $dest = Join-Path $env:USERPROFILE '.claude\settings.json'; break }
+                '^herdr-config_'         { $dest = Join-Path $env:APPDATA 'herdr\config.toml'; break }
+                '^claude_' {
+                    $dest = Join-Path $env:USERPROFILE '.claude'
+                    $mergeIntoClaude = $true
+                    break
+                }
             }
 
             if (-not $dest) {
@@ -718,7 +912,11 @@ function Invoke-DevkitBackups {
 
             Write-Host "Restore plan:" -ForegroundColor Cyan
             Write-Host "  Source: $($match.FullName)"
-            Write-Host "  Target: $dest"
+            if ($mergeIntoClaude) {
+                Write-Host "  Target: $dest (merge - existing sessions/projects preserved)"
+            } else {
+                Write-Host "  Target: $dest"
+            }
             $confirm = Read-Host "Proceed? (y/N)"
             if ($confirm -notmatch '^[yY]') {
                 Write-Host "Cancelled." -ForegroundColor DarkGray
@@ -726,7 +924,16 @@ function Invoke-DevkitBackups {
             }
 
             try {
-                if ($match.PSIsContainer) {
+                if ($mergeIntoClaude) {
+                    # Merge the snapshot's contents INTO ~/.claude, overwriting only
+                    # the managed items it contains; never remove the target tree.
+                    if (-not (Test-Path $dest)) {
+                        New-Item -Path $dest -ItemType Directory -Force | Out-Null
+                    }
+                    foreach ($item in (Get-ChildItem -Path $match.FullName -Force)) {
+                        Copy-Item -Path $item.FullName -Destination $dest -Recurse -Force
+                    }
+                } elseif ($match.PSIsContainer) {
                     if (Test-Path $dest) {
                         Remove-Item -Path $dest -Recurse -Force
                     }
@@ -812,6 +1019,8 @@ function devkit {
         'find'    { Find-DevkitEntry @Rest }
         'update'  { Invoke-DevkitUpdate }
         'nvim'    { Invoke-DevkitNvim @Rest }
+        'claude'  { Invoke-DevkitClaude @Rest }
+        'herdr'   { Invoke-DevkitHerdr @Rest }
         'backups' { Invoke-DevkitBackups @Rest }
         'fix'     { Invoke-DevkitFix @Rest }
         default {
@@ -841,12 +1050,14 @@ Register-ArgumentCompleter -CommandName devkit -ScriptBlock {
     switch ($position) {
         1 {
             # Top-level commands
-            $candidates = @('help', 'version', 'doctor', 'find', 'update', 'nvim', 'backups', 'fix')
+            $candidates = @('help', 'version', 'doctor', 'find', 'update', 'nvim', 'claude', 'herdr', 'backups', 'fix')
         }
         2 {
             switch ($tokens[1].ToLower()) {
-                'help'    { $candidates = @('modules', 'aliases', 'keymaps', 'functions', 'git', 'nvim', 'env', 'commands') }
+                'help'    { $candidates = @('modules', 'aliases', 'keymaps', 'functions', 'git', 'nvim', 'claude', 'herdr', 'env', 'commands') }
                 'nvim'    { $candidates = @('refresh') }
+                'claude'  { $candidates = @('refresh') }
+                'herdr'   { $candidates = @('refresh') }
                 'backups' { $candidates = @('list', 'restore') }
                 'fix'     { $candidates = @('terminal-icons') }
             }
