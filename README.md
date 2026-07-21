@@ -42,6 +42,7 @@ Install these **before** running the wizard. [winget](https://learn.microsoft.co
 | Node.js | General dev workflows (and npm-based Claude Code install) | `winget install --id OpenJS.NodeJS.LTS -e` |
 | Claude Code CLI | Using the Claude agents/skills/commands the wizard installs into `~/.claude` | Native (recommended): `irm https://claude.ai/install.ps1 \| iex` (installs to `%USERPROFILE%\.local\bin`) &nbsp;·&nbsp; or npm: `npm install -g @anthropic-ai/claude-code` |
 | Herdr | Using the herdr terminal-multiplexer configuration/skill | Windows: see [herdr.dev](https://herdr.dev) (installs to `%LOCALAPPDATA%\Programs\Herdr\bin`) &nbsp;·&nbsp; macOS/Linux: `brew install herdr` or `curl -fsSL https://herdr.dev/install.sh \| sh` |
+| glow | Rendering markdown in the terminal (READMEs, `CLAUDE.md`, notes) | `winget install --id charmbracelet.glow -e` |
 
 > The wizard installs the Claude assets to `~/.claude` and writes the herdr config to `%APPDATA%\herdr` **regardless** of whether the Claude Code / Herdr binaries are present — but you need the respective CLI installed to actually use them.
 
@@ -97,6 +98,7 @@ What *does* need to be on `PATH` is the [prerequisite tools](#prerequisites) —
 | `claude` | `%USERPROFILE%\.local\bin` (native install) |
 | `herdr` | `%LOCALAPPDATA%\Programs\Herdr\bin` |
 | `node` / `npm` | `C:\Program Files\nodejs` |
+| `glow` | `%LOCALAPPDATA%\Microsoft\WinGet\Links` (winget shim) |
 
 Because the generated PowerShell profile calls `oh-my-posh` (and, if you set it as the Git editor, `nvim`) **by name**, make sure those are on `PATH` before your first new session — i.e. **open a fresh terminal after installing the prerequisites** so the updated `PATH` is picked up, then run the wizard.
 

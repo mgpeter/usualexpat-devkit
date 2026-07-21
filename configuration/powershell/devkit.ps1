@@ -445,9 +445,9 @@ function Invoke-DevkitDoctor {
         _Devkit-CheckResult WARN 'Oh-My-Posh theme not set' -Hint 'Run: devkit update'
     }
 
-    # 7. Required tools on PATH (claude/herdr are optional external apps the
-    # devkit only configures - assets install regardless of whether they're on PATH)
-    foreach ($tool in @('git', 'nvim', 'oh-my-posh', 'claude', 'herdr')) {
+    # 7. Required tools on PATH (claude/herdr/glow are optional external apps the
+    # devkit only configures or leverages - nothing here is installed by the devkit)
+    foreach ($tool in @('git', 'nvim', 'oh-my-posh', 'claude', 'herdr', 'glow')) {
         $cmd = Get-Command $tool -ErrorAction SilentlyContinue
         if ($cmd) {
             _Devkit-CheckResult OK "$tool on PATH" -Detail $cmd.Source
@@ -458,6 +458,7 @@ function Invoke-DevkitDoctor {
                 'git'        { 'winget install Git.Git' }
                 'claude'     { 'Optional: install Claude Code to use the bundled agents/commands' }
                 'herdr'      { 'Optional: external multiplexer; the devkit only writes its config' }
+                'glow'       { 'Optional: winget install charmbracelet.glow (terminal markdown renderer)' }
             }
             _Devkit-CheckResult WARN "$tool not on PATH" -Hint $hint
         }
