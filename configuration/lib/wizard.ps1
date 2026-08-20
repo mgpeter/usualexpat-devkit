@@ -507,13 +507,22 @@ function Show-GitConfigPreview {
 "@
 
     foreach ($profile in $AdditionalProfiles) {
-        $configFileName = ".gitconfig-" + ($profile.Directory -replace '[:/\\]', '-').Trim('-')
+        # Mirror New-GitConfig exactly rather than re-deriving the name here.
+        $configFileName = Get-ProfileConfigFileName -Directory $profile.Directory
+        $configPath = (Join-Path $env:USERPROFILE $configFileName) -replace '\\', '/'
         $preview += @"
 
-[[includeIf "gitdir:$($profile.Directory)"]]
-    path = ~/$configFileName
+[[includeIf "gitdir/i:$($profile.Directory)"]]
+    path = $configPath
 "@
     }
+
+    $preview += @"
+
+
+# plus [[core]], aliases, [[push]], [[branch]], [[help]], [[color]], [[gpg]], [[init]]
+# sections the devkit does not author are preserved from your current file
+"@
 
     # Display in a panel - use Out-Host to render without returning to pipeline
     $preview | Format-SpectrePanel -Title "~/.gitconfig" -Border Rounded -Color Blue | Out-Host
@@ -1139,11 +1148,16 @@ function Show-ClaudeCodeStep {
         whether the Claude CLI is on PATH.
     .PARAMETER Config
         Current DevkitConfig hashtable
+    .PARAMETER DevkitRoot
+        Root path of the source devkit repo, used to compare the bundled CLAUDE.md
+        against the one already installed
     .OUTPUTS
         Updated configuration hashtable
     #>
     param(
-        [hashtable]$Config
+        [hashtable]$Config,
+
+        [string]$DevkitRoot = ""
     )
 
     Show-StepHeader -StepNumber 8 -StepTitle "Claude Code & Herdr" -TotalSteps 10
@@ -1157,6 +1171,7 @@ function Show-ClaudeCodeStep {
         $Config.Claude = @{
             Install = $false; InstallAgents = $false; InstallSkills = $false
             InstallCommands = $false; InstallClaudeMd = $false; InstallHerdr = $false
+            ForceClaudeMd = $false
         }
     }
 
@@ -1214,6 +1229,21 @@ function Show-ClaudeCodeStep {
 
     foreach ($label in $areas.Keys) {
         $Config.Claude[$areas[$label]] = ($selected -contains $label)
+    }
+
+    # ~/.claude/CLAUDE.md is where personal global instructions accumulate, so it often
+    # runs ahead of the bundled copy. Ask rather than let the repo silently win.
+    $Config.Claude.ForceClaudeMd = $false
+    if ($Config.Claude.InstallClaudeMd -and $DevkitRoot -and
+        (Test-DevkitClaudeMdDrift -SourceRoot $DevkitRoot)) {
+        Write-Host ""
+        Write-SpectreHost "[yellow]Your ~/.claude/CLAUDE.md differs from the bundled copy.[/]"
+        Write-SpectreHost "[dim]Either way the current file is backed up to ~/.devkit/backups/.[/]"
+        $Config.Claude.ForceClaudeMd = Read-SpectreConfirm -Prompt "Replace it with the devkit version?" -DefaultAnswer "n"
+        if (-not $Config.Claude.ForceClaudeMd) {
+            $Config.Claude.InstallClaudeMd = $false
+            Write-SpectreHost "[dim]Keeping your CLAUDE.md as-is.[/]"
+        }
     }
 
     Write-Host ""
@@ -1332,7 +1362,20 @@ function Invoke-Installation {
         @{
             Name = "Generating Git configuration"
             Action = {
+                # Read the user-owned sections first: Save-GitConfig carries them into
+                # the new file, and naming them here means a stale [include] or an old
+                # credential helper is visible instead of silently inherited.
+                $gitConfigPath = Join-Path $env:USERPROFILE ".gitconfig"
+                $preserved = @(Get-UnmanagedGitConfigSections -Path $gitConfigPath)
+
                 $gitResult = Save-GitConfig -Config $Config
+                New-GlobalGitIgnore | Out-Null
+
+                if ($preserved.Count -gt 0) {
+                    $names = ($preserved | ForEach-Object { "[[$($_.Header)]]" }) -join ", "
+                    Write-SpectreHost "  [dim]kept your own sections: $names[/]"
+                }
+
                 return $gitResult
             }
         }
@@ -1398,7 +1441,7 @@ function Invoke-Installation {
                     Write-SpectreHost "  [dim](skipped - not selected)[/]"
                     return $true
                 }
-                return Copy-DevkitClaudeMd -SourceRoot $SourceRoot
+                return Copy-DevkitClaudeMd -SourceRoot $SourceRoot -Force:([bool]$Config.Claude.ForceClaudeMd)
             }
         }
         @{
@@ -1676,7 +1719,7 @@ function Start-Wizard {
     $script:WizardState.Config = Show-NvimConfigStep -Config $script:WizardState.Config
 
     # Step 8: Claude Code & Herdr
-    $script:WizardState.Config = Show-ClaudeCodeStep -Config $script:WizardState.Config
+    $script:WizardState.Config = Show-ClaudeCodeStep -Config $script:WizardState.Config -DevkitRoot $DevkitRoot
 
     # Confirmation step
     Show-StepHeader -StepNumber 9 -StepTitle "Review Configuration" -TotalSteps 10

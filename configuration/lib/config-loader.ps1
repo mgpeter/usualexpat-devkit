@@ -14,9 +14,16 @@ function Get-ExistingGitConfig {
     <#
     .SYNOPSIS
         Parses existing ~/.gitconfig for user settings
+    .PARAMETER Path
+        Optional path to a .gitconfig (defaults to ~/.gitconfig). When supplied, the
+        `git config --global` fallback is skipped so the file is parsed in isolation -
+        this is what makes the parser testable without touching the real config.
     .OUTPUTS
         Hashtable with Name, Email, and AdditionalProfiles
     #>
+    param(
+        [string]$Path = ""
+    )
 
     $result = @{
         Found = $false
@@ -29,7 +36,8 @@ function Get-ExistingGitConfig {
         Editor = ""
     }
 
-    $gitConfigPath = Join-Path $env:USERPROFILE ".gitconfig"
+    $useGlobalFallback = -not $Path
+    $gitConfigPath = if ($Path) { $Path } else { Join-Path $env:USERPROFILE ".gitconfig" }
 
     if (-not (Test-Path $gitConfigPath)) {
         return $result
@@ -49,17 +57,23 @@ function Get-ExistingGitConfig {
             $result.DefaultProfile.Email = $Matches[1].Trim()
         }
 
-        # Alternative: use git config command for more reliable parsing
-        $gitName = git config --global user.name 2>$null
-        $gitEmail = git config --global user.email 2>$null
-        $gitEditor = git config --global core.editor 2>$null
+        # Alternative: use git config command for more reliable parsing. Only when reading
+        # the real global config - an explicit -Path must be parsed on its own.
+        if ($useGlobalFallback) {
+            $gitName = git config --global user.name 2>$null
+            $gitEmail = git config --global user.email 2>$null
+            $gitEditor = git config --global core.editor 2>$null
 
-        if ($gitName) { $result.DefaultProfile.Name = $gitName }
-        if ($gitEmail) { $result.DefaultProfile.Email = $gitEmail }
-        if ($gitEditor) { $result.Editor = $gitEditor }
+            if ($gitName) { $result.DefaultProfile.Name = $gitName }
+            if ($gitEmail) { $result.DefaultProfile.Email = $gitEmail }
+            if ($gitEditor) { $result.Editor = $gitEditor }
+        }
 
         # Parse includeIf sections for additional profiles
-        $includeIfPattern = '\[includeIf\s+"gitdir:([^"]+)"\]\s*\n\s*path\s*=\s*(.+?)\s*\n'
+        # New-GitConfig writes the case-insensitive "gitdir/i:" form; older hand-written
+        # configs use plain "gitdir:". Accept both, or a re-run silently drops every
+        # includeIf block and orphans the .gitconfig-* files.
+        $includeIfPattern = '\[includeIf\s+"gitdir(?:/i)?:([^"]+)"\]\s*\n\s*path\s*=\s*(.+?)\s*\n'
         $matches = [regex]::Matches($content, $includeIfPattern)
 
         foreach ($match in $matches) {
@@ -405,6 +419,9 @@ function Get-ExistingConfiguration {
             InstallCommands = $true
             InstallClaudeMd = $true
             InstallHerdr    = $true
+            # Set by the wizard only when the user agrees to replace a drifted
+            # ~/.claude/CLAUDE.md - see Test-DevkitClaudeMdDrift.
+            ForceClaudeMd   = $false
         }
         _Detection = @{
             GitConfigFound = $false

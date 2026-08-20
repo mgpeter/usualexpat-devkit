@@ -10,6 +10,89 @@
 
 #region Git Configuration Generation
 
+# Section headers that New-GitConfig itself writes. Anything else found in an existing
+# .gitconfig is carried over verbatim by Save-GitConfig, so hand-added settings and
+# tool-written blocks (git-lfs filters, credential helpers, url rewrites) survive an
+# install. Ownership keys on the FULL header: [gpg] is ours, [gpg "ssh"] is not.
+$script:DevkitGitSections = @(
+    'user', 'core', 'alias', 'push', 'branch', 'help', 'color', 'gpg', 'commit', 'tag', 'init'
+)
+
+$script:DevkitGitPreserveMarker = '# --- preserved from your previous .gitconfig (not managed by devkit) ---'
+
+function Get-UnmanagedGitConfigSections {
+    <#
+    .SYNOPSIS
+        Extracts the sections of an existing .gitconfig that the devkit does not author
+    .DESCRIPTION
+        Splits the file into [header] + body blocks and returns those whose header is not
+        in $script:DevkitGitSections (and is not an includeIf, which New-GitConfig rebuilds
+        from the configured profiles). A header carrying a subsection - [filter "lfs"],
+        [gpg "ssh"] - is never owned, because New-GitConfig only ever writes bare headers.
+        Content before the first header, and any previous preserve marker, is dropped.
+    .PARAMETER Path
+        Path to the .gitconfig to inspect
+    .OUTPUTS
+        Array of PSCustomObject with Header and Lines
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    if (-not (Test-Path $Path)) { return @() }
+
+    try {
+        $lines = @(Get-Content -Path $Path -ErrorAction Stop)
+    } catch {
+        Write-Warning "Could not read $Path to preserve unmanaged sections: $_"
+        return @()
+    }
+
+    $sections = [System.Collections.Generic.List[object]]::new()
+    $current = $null
+
+    foreach ($line in $lines) {
+        # Drop a marker written by an earlier save so re-runs emit exactly one.
+        if ($line.Trim() -eq $script:DevkitGitPreserveMarker) { continue }
+
+        if ($line -match '^\s*\[(.+?)\]\s*$') {
+            $header = $Matches[1].Trim()
+            # 'filter "lfs"' -> name 'filter', subsection present
+            $name = ($header -split '\s+', 2)[0].ToLowerInvariant()
+            $hasSubsection = $header -match '\s'
+
+            $owned = ($name -eq 'includeif') -or
+                     ((-not $hasSubsection) -and ($script:DevkitGitSections -contains $name))
+
+            if ($owned) {
+                $current = $null
+            } else {
+                $current = [PSCustomObject]@{
+                    Header = $header
+                    Lines  = [System.Collections.Generic.List[string]]::new()
+                }
+                $current.Lines.Add($line)
+                $sections.Add($current)
+            }
+        }
+        elseif ($current) {
+            $current.Lines.Add($line)
+        }
+    }
+
+    # Trim trailing blank lines so the emitted file keeps one blank line between sections.
+    foreach ($section in $sections) {
+        while ($section.Lines.Count -gt 0 -and
+               [string]::IsNullOrWhiteSpace($section.Lines[$section.Lines.Count - 1])) {
+            $section.Lines.RemoveAt($section.Lines.Count - 1)
+        }
+    }
+
+    return $sections.ToArray()
+}
+
+
 function New-GitConfig {
     <#
     .SYNOPSIS
@@ -125,16 +208,25 @@ function New-GitConfig {
 
 '@
 
-    # GPG sections (disabled by default)
+    # Repository defaults
+    $content += @'
+[init]
+    defaultBranch = main
+
+'@
+
+    # GPG sections (signing disabled by default)
     $content += @'
 [gpg]
     program = gpg
+    format = openpgp
 
 [commit]
     gpgSign = false
 
 [tag]
     forceSignAnnotated = false
+
 '@
 
     return $content
@@ -206,7 +298,21 @@ function Save-GitConfig {
     }
 
     try {
+        # Collect what the devkit does not author BEFORE overwriting, so hand-added and
+        # tool-written blocks (git-lfs filters, [gpg "ssh"], credential helpers, url
+        # rewrites, safe.directory) survive an install or a re-run. Do not regress this
+        # back to a plain overwrite - it silently destroys the user's own git settings.
+        $preserved = @(Get-UnmanagedGitConfigSections -Path $Path)
+
         $content = New-GitConfig -Config $Config
+
+        if ($preserved.Count -gt 0) {
+            $content += "`r`n" + $script:DevkitGitPreserveMarker + "`r`n"
+            foreach ($section in $preserved) {
+                $content += "`r`n" + (($section.Lines) -join "`r`n") + "`r`n"
+            }
+        }
+
         Set-Content -Path $Path -Value $content -Encoding UTF8 -Force
         return $true
     } catch {
@@ -245,6 +351,55 @@ function Save-GitProfileConfigs {
     }
 
     return $savedFiles
+}
+
+function New-GlobalGitIgnore {
+    <#
+    .SYNOPSIS
+        Creates ~/.gitignore_global when it does not already exist
+    .DESCRIPTION
+        New-GitConfig points core.excludesfile at ~/.gitignore_global. Git ignores a
+        missing excludesfile silently, so without this the setting is dead on a fresh
+        machine. An existing file is never touched - the user's own rules win.
+    .PARAMETER Path
+        Optional path (defaults to ~/.gitignore_global)
+    .OUTPUTS
+        String - path to the file, or empty string on failure
+    #>
+    param(
+        [string]$Path = ""
+    )
+
+    if (-not $Path) {
+        $Path = Join-Path $env:USERPROFILE ".gitignore_global"
+    }
+
+    if (Test-Path $Path) { return $Path }
+
+    $content = @'
+# Global gitignore - applies to every repository on this machine.
+# Created by devkit because .gitconfig sets core.excludesfile to this path.
+# Add your own entries freely; devkit never overwrites an existing file.
+
+# Windows shell cruft
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Editor / IDE local state
+*.user
+*.suo
+.vs/
+.idea/
+'@
+
+    try {
+        Set-Content -Path $Path -Value $content -Encoding UTF8 -Force
+        return $Path
+    } catch {
+        Write-Warning "Failed to create ${Path}: $_"
+        return ""
+    }
 }
 
 #endregion
@@ -749,6 +904,7 @@ function Invoke-ConfigGeneration {
     # Step 5: Generate .gitconfig
     try {
         $results.GitConfig = Save-GitConfig -Config $Config
+        New-GlobalGitIgnore | Out-Null
     } catch {
         $results.Errors += "GitConfig: $_"
         $results.Success = $false
@@ -891,20 +1047,58 @@ function Copy-DevkitClaudeCommands {
     return Copy-DevkitClaudeArea -SourceRoot $SourceRoot -Area "commands"
 }
 
+function Test-DevkitClaudeMdDrift {
+    <#
+    .SYNOPSIS
+        Reports whether ~/.claude/CLAUDE.md has diverged from the bundled copy
+    .DESCRIPTION
+        The live file is where personal global instructions accumulate, so it regularly
+        runs ahead of the repo. Callers use this to prompt instead of overwriting.
+    .PARAMETER SourceRoot
+        Root path of the source devkit repo
+    .OUTPUTS
+        Boolean - True when a local file exists and its content differs from the bundle
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$SourceRoot
+    )
+
+    $sourcePath = Join-Path $SourceRoot "configuration/claude/CLAUDE.md"
+    $destPath = Join-Path (Get-ClaudeUserRoot) "CLAUDE.md"
+
+    if (-not (Test-Path $sourcePath)) { return $false }
+    if (-not (Test-Path $destPath)) { return $false }
+
+    try {
+        return ((Get-Content $sourcePath -Raw) -ne (Get-Content $destPath -Raw))
+    } catch {
+        # If it cannot be compared, treat it as drifted - refusing to overwrite is the
+        # safe failure here.
+        return $true
+    }
+}
+
 function Copy-DevkitClaudeMd {
     <#
     .SYNOPSIS
         Installs the bundled global CLAUDE.md into ~/.claude/CLAUDE.md
     .DESCRIPTION
-        Backs up any existing ~/.claude/CLAUDE.md before overwriting.
+        Backs up any existing ~/.claude/CLAUDE.md before overwriting. If the live file
+        has diverged from the bundled one it is left alone unless -Force is given, so a
+        refresh cannot silently discard instructions added since the last install.
     .PARAMETER SourceRoot
         Root path of the source devkit repo
+    .PARAMETER Force
+        Overwrite even when the live file differs from the bundled copy
     .OUTPUTS
-        Boolean - True if successful
+        Boolean - True if the file was installed or already matched
     #>
     param(
         [Parameter(Mandatory)]
-        [string]$SourceRoot
+        [string]$SourceRoot,
+
+        [switch]$Force
     )
 
     $sourcePath = Join-Path $SourceRoot "configuration/claude/CLAUDE.md"
@@ -919,6 +1113,11 @@ function Copy-DevkitClaudeMd {
     try {
         if (-not (Test-Path $destDir)) {
             New-Item -Path $destDir -ItemType Directory -Force | Out-Null
+        }
+
+        if (-not $Force -and (Test-DevkitClaudeMdDrift -SourceRoot $SourceRoot)) {
+            Write-Warning "$destPath differs from the bundled CLAUDE.md - leaving it in place. Re-run with -Force to overwrite (the existing file is backed up first)."
+            return $false
         }
 
         # Back up an existing global instructions file before replacing it.
@@ -1079,9 +1278,10 @@ function Save-HerdrConfig {
 # Claude Code & Herdr:
 # - Get-ClaudeUserRoot, Get-HerdrConfigRoot
 # - Copy-DevkitClaudeAgents, Copy-DevkitClaudeSkills, Copy-DevkitClaudeCommands, Copy-DevkitClaudeMd
+# - Test-DevkitClaudeMdDrift
 # - Install-HerdrHookAndSettings, Save-HerdrConfig
 # Git:
-# - New-GitConfig, Save-GitConfig
+# - New-GitConfig, Save-GitConfig, Get-UnmanagedGitConfigSections, New-GlobalGitIgnore
 # - Get-ProfileConfigFileName, New-GitProfileConfig, Save-GitProfileConfigs
 # PowerShell:
 # - New-VariablesPs1, Save-VariablesPs1

@@ -56,7 +56,9 @@ try {
     $agents = Copy-DevkitClaudeAgents -SourceRoot $SourceRoot
     $skills = Copy-DevkitClaudeSkills -SourceRoot $SourceRoot
     $commands = Copy-DevkitClaudeCommands -SourceRoot $SourceRoot
-    $mdOk = Copy-DevkitClaudeMd -SourceRoot $SourceRoot
+    # -Force: this test asserts a deterministic install, and without it a CLAUDE.md
+    # that has drifted from the bundled copy is deliberately left alone.
+    $mdOk = Copy-DevkitClaudeMd -SourceRoot $SourceRoot -Force
     $hookOk = Install-HerdrHookAndSettings -SourceRoot $SourceRoot
     $herdrOk = Save-HerdrConfig -SourceRoot $SourceRoot
 

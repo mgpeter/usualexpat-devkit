@@ -86,10 +86,24 @@ Use for researching third-party SDKs and libraries.
 
 ## Communication Style
 
+- **Never use the em-dash character, U+2014.** Not in chat replies, code, comments, documentation, commit
+  messages, or UI copy. Use a plain hyphen `-` instead, or restructure the sentence. (Stated by codepoint
+  rather than by example, so this file does not break its own rule.)
 - Be direct and concise
 - Skip unnecessary validation phrases ("Great question!", "Absolutely!")
 - Focus on actionable information
 - When presenting options, include trade-offs
+
+---
+
+## Version Control / Git
+
+- Use imperative present tense for commit message subjects (e.g., "Add feature XYZ" not "Added feature XYZ" and not "Adds feature XYZ")
+- Use the body of the commit message to explain why a change was made, not just what was changed
+- Be consistent with branch naming conventions (e.g., `feature/`, `bugfix/`, `hotfix/`, `refactor/`)
+- Use commit message formatting (wrap lines at 72 characters, use bullet points for lists)
+- Be explicit about breaking changes in commit messages and PR descriptions
+- Be concise in commit messages; avoid unnecessary verbosity
 
 ---
 

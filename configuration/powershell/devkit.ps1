@@ -102,7 +102,7 @@ $script:DevkitRegistry = @{
         @{ Name = 'devkit find <keyword>';          Description = 'Search inventory for matching rows' }
         @{ Name = 'devkit update';                  Description = 'Re-run install.ps1 (re-launches the wizard)' }
         @{ Name = 'devkit nvim refresh';            Description = 'Re-copy the bundled Neovim config' }
-        @{ Name = 'devkit claude refresh';          Description = 'Re-copy bundled Claude Code assets into ~/.claude' }
+        @{ Name = 'devkit claude refresh [--force]'; Description = 'Re-copy bundled Claude Code assets into ~/.claude (--force replaces a drifted CLAUDE.md)' }
         @{ Name = 'devkit herdr refresh';           Description = 'Re-write %APPDATA%\herdr\config.toml' }
         @{ Name = 'devkit backups list';            Description = 'List ~/.devkit/backups/' }
         @{ Name = 'devkit backups restore <name>';  Description = 'Restore a backup file or directory' }
@@ -749,7 +749,10 @@ function Invoke-DevkitClaude {
     [CmdletBinding()]
     param(
         [Parameter(Position = 0)]
-        [string]$Action
+        [string]$Action,
+
+        [Parameter(ValueFromRemainingArguments)]
+        [string[]]$Rest
     )
 
     switch ($Action) {
@@ -758,8 +761,17 @@ function Invoke-DevkitClaude {
             if (-not $libPath) { return }
             . $libPath
 
+            $force = @($Rest) -contains '--force' -or @($Rest) -contains '-Force'
             $root = $env:DEVKIT_REPO_ROOT
-            Copy-DevkitClaudeMd       -SourceRoot $root
+
+            # CLAUDE.md is the one asset that accumulates edits outside the repo, so a
+            # plain refresh leaves a drifted file alone and says so.
+            if (-not (Copy-DevkitClaudeMd -SourceRoot $root -Force:$force)) {
+                Write-Host "  CLAUDE.md skipped - re-run as " -NoNewline -ForegroundColor DarkGray
+                Write-Host "devkit claude refresh --force" -NoNewline -ForegroundColor Yellow
+                Write-Host " to overwrite it." -ForegroundColor DarkGray
+            }
+
             Copy-DevkitClaudeAgents   -SourceRoot $root
             Copy-DevkitClaudeSkills   -SourceRoot $root
             Copy-DevkitClaudeCommands -SourceRoot $root
@@ -769,7 +781,7 @@ function Invoke-DevkitClaude {
             Write-Host (Join-Path $env:USERPROFILE '.claude') -ForegroundColor Green
         }
         default {
-            Write-Warning "Usage: devkit claude refresh"
+            Write-Warning "Usage: devkit claude refresh [--force]"
         }
     }
 }
@@ -1057,7 +1069,7 @@ Register-ArgumentCompleter -CommandName devkit -ScriptBlock {
             switch ($tokens[1].ToLower()) {
                 'help'    { $candidates = @('modules', 'aliases', 'keymaps', 'functions', 'git', 'nvim', 'claude', 'herdr', 'env', 'commands') }
                 'nvim'    { $candidates = @('refresh') }
-                'claude'  { $candidates = @('refresh') }
+                'claude'  { $candidates = @('refresh', '--force') }
                 'herdr'   { $candidates = @('refresh') }
                 'backups' { $candidates = @('list', 'restore') }
                 'fix'     { $candidates = @('terminal-icons') }

@@ -74,8 +74,10 @@ Install these **before** running the wizard. [winget](https://learn.microsoft.co
 
    The wizard automatically:
    - Backs up your existing configuration files
-   - Generates `.gitconfig` with your settings
+   - Generates `.gitconfig` with your settings, carrying over any section the devkit does not author (git-lfs filters, credential helpers, `[gpg "ssh"]`, url rewrites, `safe.directory`) and listing what it kept
+   - Creates `~/.gitignore_global` if it is missing, so `core.excludesfile` points at a real file
    - Creates directory-specific Git profiles (e.g., different email for work repos)
+   - Leaves an edited `~/.claude/CLAUDE.md` alone unless you confirm the replacement
    - Updates your PowerShell profile
    - Installs selected modules
    - Installs the selected Claude Code assets and merges the herdr `SessionStart` hook into `~/.claude/settings.json` without touching your other settings
@@ -116,7 +118,7 @@ After installation, an in-shell `devkit` command is auto-loaded by your PowerShe
 | `devkit find <keyword>` | Search the whole inventory — modules, aliases, keybindings, functions, git aliases, nvim keymaps, and bundled Claude agents/commands/skills |
 | `devkit update` | Re-run the installation wizard |
 | `devkit nvim refresh` | Re-copy the bundled Neovim config |
-| `devkit claude refresh` | Re-copy the bundled Claude assets into `~/.claude` (agents, commands, skills, `CLAUDE.md`, herdr hook) |
+| `devkit claude refresh [--force]` | Re-copy the bundled Claude assets into `~/.claude` (agents, commands, skills, `CLAUDE.md`, herdr hook). A `CLAUDE.md` that differs from the bundled copy is left alone; `--force` replaces it (after a backup) |
 | `devkit herdr refresh` | Re-write `%APPDATA%\herdr\config.toml` |
 | `devkit backups list` | List timestamped backups in `~/.devkit/backups/` |
 | `devkit backups restore <name>` | Restore a backup; the destination is inferred from the name (nvim, gitconfig, PowerShell profile, `CLAUDE.md`, `settings.json`, herdr `config.toml`, or a `~/.claude` snapshot merged in non-destructively) |
