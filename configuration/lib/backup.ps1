@@ -147,7 +147,8 @@ function Backup-ClaudeConfig {
         return $null
     }
 
-    $items = @("agents", "skills", "commands", "CLAUDE.md", "settings.json")
+    $items = @("agents", "skills", "commands", "CLAUDE.md", "settings.json",
+        "awesome-statusline.ps1")
     $present = $items | Where-Object { Test-Path (Join-Path $claudeRoot $_) }
 
     if (-not $present) {
@@ -345,8 +346,10 @@ function Invoke-BackupCleanup {
         [int]$KeepCount = 5
     )
 
+    # Prefixes are disjoint under -Filter "<type>_*": the filter honours only * and ?,
+    # so "claude_*" needs a literal underscore and never matches "claude-md_*" et al.
     $backupTypes = @("gitconfig", "powershell-profile", "gitconfig-profile", "nvim",
-        "claude", "claude-md", "claude-settings", "herdr-config")
+        "claude", "claude-md", "claude-settings", "claude-statusline", "herdr-config")
 
     $totalRemoved = 0
     foreach ($type in $backupTypes) {

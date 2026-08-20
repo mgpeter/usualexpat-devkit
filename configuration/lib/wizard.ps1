@@ -1143,9 +1143,10 @@ function Show-ClaudeCodeStep {
         Wizard step for installing Claude Code assets and herdr configuration
     .DESCRIPTION
         Offers a parent gate plus per-area sub-toggles for agents, skills,
-        commands, CLAUDE.md, and herdr configuration. Assets install into
-        ~/.claude (and %APPDATA%\herdr for the herdr config) regardless of
-        whether the Claude CLI is on PATH.
+        commands, CLAUDE.md, herdr configuration, and the statusline. Assets install
+        into ~/.claude (and %APPDATA%\herdr for the herdr config) regardless of
+        whether the Claude CLI is on PATH. The statusline area differs from the rest:
+        its renderer is downloaded from upstream rather than bundled in this repo.
     .PARAMETER Config
         Current DevkitConfig hashtable
     .PARAMETER DevkitRoot
@@ -1160,10 +1161,11 @@ function Show-ClaudeCodeStep {
         [string]$DevkitRoot = ""
     )
 
-    Show-StepHeader -StepNumber 8 -StepTitle "Claude Code & Herdr" -TotalSteps 10
+    Show-StepHeader -StepNumber 8 -StepTitle "Claude Code, Statusline & Herdr" -TotalSteps 10
 
     Write-SpectreHost "Install Claude Code assets (agents, skills, commands, CLAUDE.md) into `$env:USERPROFILE\.claude"
-    Write-SpectreHost "[dim]and the herdr terminal-multiplexer configuration (settings.json hook + %APPDATA%\herdr\config.toml).[/]"
+    Write-SpectreHost "[dim]the herdr terminal-multiplexer configuration (settings.json hook + %APPDATA%\herdr\config.toml),[/]"
+    Write-SpectreHost "[dim]and the Awesome Statusline renderer, downloaded fresh from upstream.[/]"
     Write-Host ""
 
     # Ensure the Claude sub-hashtable exists even if config-loader didn't populate it
@@ -1172,8 +1174,15 @@ function Show-ClaudeCodeStep {
             Install = $false; InstallAgents = $false; InstallSkills = $false
             InstallCommands = $false; InstallClaudeMd = $false; InstallHerdr = $false
             ForceClaudeMd = $false
+            InstallStatusLine = $false; StatusLineSize = 'small'; StatusLineMode = 'Fresh'
         }
     }
+
+    # Seed the statusline keys individually too, so a Claude block built by an older
+    # config-loader still gets them (same belt-and-braces as ForceClaudeMd).
+    if (-not $Config.Claude.ContainsKey('InstallStatusLine')) { $Config.Claude.InstallStatusLine = $false }
+    if (-not $Config.Claude.ContainsKey('StatusLineSize')) { $Config.Claude.StatusLineSize = 'small' }
+    if (-not $Config.Claude.ContainsKey('StatusLineMode')) { $Config.Claude.StatusLineMode = 'Fresh' }
 
     # Detection display (informational)
     $claude = Test-ClaudeCodeAvailable
@@ -1194,17 +1203,25 @@ function Show-ClaudeCodeStep {
     if ($Config._Detection -and $Config._Detection.ClaudeSettingsFound) {
         Write-SpectreHost "[dim]Existing ~/.claude/settings.json detected; the herdr hook is merged without touching your other settings.[/]"
     }
+
+    if ($Config._Detection -and $Config._Detection.StatusLineFound) {
+        $sizeText = if ($Config._Detection.StatusLineSize) { $Config._Detection.StatusLineSize } else { "unknown" }
+        Write-SpectreHost "[dim]Existing statusline wired (size: $sizeText).[/]"
+    } elseif ($Config._Detection -and $Config._Detection.StatusLineScriptFound) {
+        Write-SpectreHost "[dim]An awesome-statusline.ps1 exists but is not wired into settings.json.[/]"
+    }
     Write-Host ""
 
     # Parent gate
-    $Config.Claude.Install = Read-SpectreConfirm -Prompt "Install Claude Code assets and herdr configuration?" -DefaultAnswer "y"
+    $Config.Claude.Install = Read-SpectreConfirm -Prompt "Install Claude Code assets, statusline and herdr configuration?" -DefaultAnswer "y"
     if (-not $Config.Claude.Install) {
         $Config.Claude.InstallAgents = $false
         $Config.Claude.InstallSkills = $false
         $Config.Claude.InstallCommands = $false
         $Config.Claude.InstallClaudeMd = $false
         $Config.Claude.InstallHerdr = $false
-        Write-SpectreHost "[yellow]Skipping Claude Code & herdr configuration.[/]"
+        $Config.Claude.InstallStatusLine = $false
+        Write-SpectreHost "[yellow]Skipping Claude Code, statusline & herdr configuration.[/]"
         return $Config
     }
 
@@ -1220,10 +1237,11 @@ function Show-ClaudeCodeStep {
         "Commands (slash commands)"          = "InstallCommands"
         "CLAUDE.md (global instructions)"    = "InstallClaudeMd"
         "Herdr configuration (settings hook + config.toml)" = "InstallHerdr"
+        "Statusline (Awesome Statusline, downloaded from upstream)" = "InstallStatusLine"
     }
 
     $selected = Read-SpectreMultiSelection `
-        -Title "Claude Code & Herdr" `
+        -Title "Claude Code, Statusline & Herdr" `
         -Choices ([string[]]$areas.Keys) `
         -AllowEmpty
 
@@ -1246,10 +1264,47 @@ function Show-ClaudeCodeStep {
         }
     }
 
+    # The statusline renderer is third-party MIT code (AwesomeJun/CC-statusline) that
+    # runs on every prompt render, so say where it comes from before downloading it.
+    $Config.Claude.StatusLineMode = 'Fresh'
+    if ($Config.Claude.InstallStatusLine) {
+        Write-Host ""
+        Write-SpectreHost "[dim]Awesome Statusline (AwesomeJun/CC-statusline, MIT) is fetched from GitHub at install time.[/]"
+        Write-SpectreHost "[dim]Needs internet access; if offline the step is skipped with a warning.[/]"
+
+        if ($Config._Detection -and $Config._Detection.StatusLineScriptFound) {
+            Write-SpectreHost "[yellow]You already have ~/.claude/awesome-statusline.ps1.[/]"
+            Write-SpectreHost "[dim]A fresh install backs the current file up to ~/.devkit/backups/ first.[/]"
+            $rendererChoice = Read-SpectreSelection `
+                -Title "Awesome Statusline renderer" `
+                -Color Blue `
+                -Choices @(
+                    "Install a fresh copy from upstream (recommended)",
+                    "Keep the existing ~/.claude/awesome-statusline.ps1"
+                )
+            $Config.Claude.StatusLineMode = if ($rendererChoice -like 'Install a fresh*') { 'Fresh' } else { 'Keep' }
+        }
+
+        # Detected size wins, so re-running the wizard never silently resizes a
+        # working statusline. Read-SpectreSelection highlights index 0.
+        $defaultSize = if ($Config._Detection -and $Config._Detection.StatusLineSize) {
+            $Config._Detection.StatusLineSize
+        } else {
+            'small'
+        }
+        $allSizes = @('xsmall', 'small', 'medium', 'large', 'xlarge')
+        if ($allSizes -notcontains $defaultSize) { $defaultSize = 'small' }
+        $sizeChoices = @($defaultSize) + ($allSizes | Where-Object { $_ -ne $defaultSize })
+        $Config.Claude.StatusLineSize = Read-SpectreSelection `
+            -Title "Statusline size" `
+            -Color Blue `
+            -Choices $sizeChoices
+    }
+
     Write-Host ""
     $anySelected = $Config.Claude.InstallAgents -or $Config.Claude.InstallSkills -or
                    $Config.Claude.InstallCommands -or $Config.Claude.InstallClaudeMd -or
-                   $Config.Claude.InstallHerdr
+                   $Config.Claude.InstallHerdr -or $Config.Claude.InstallStatusLine
     if ($anySelected) {
         Write-SpectreHost "[green]Selected Claude Code / herdr areas will be installed.[/]"
     } else {
@@ -1457,6 +1512,23 @@ function Invoke-Installation {
             }
         }
         @{
+            # Runs AFTER herdr: both write settings.json, so a fixed order means the
+            # last writer sees complete state. It is also the only step that can block
+            # on the network, so a slow fetch delays nothing else, and a failure leaves
+            # every other install already committed. Still ahead of backup cleanup so
+            # the backups it creates are pruned in the same run.
+            Name = "Installing Claude statusline"
+            Action = {
+                if (-not ($Config.Claude -and $Config.Claude.InstallStatusLine)) {
+                    Write-SpectreHost "  [dim](skipped - not selected)[/]"
+                    return $true
+                }
+                return Install-ClaudeStatusLine `
+                    -Size $Config.Claude.StatusLineSize `
+                    -Mode $Config.Claude.StatusLineMode
+            }
+        }
+        @{
             Name = "Cleaning up old backups"
             Action = {
                 Invoke-BackupCleanup -KeepCount 5 | Out-Null
@@ -1608,17 +1680,26 @@ function Show-ConfigurationSummary {
     )
     $nvimData | Format-SpectreTable -Border Rounded -Color Blue | Out-Host
 
-    # Claude Code & Herdr
+    # Claude Code, Statusline & Herdr
     Write-Host ""
-    Write-SpectreHost "[blue]Claude Code & Herdr:[/]"
+    Write-SpectreHost "[blue]Claude Code, Statusline & Herdr:[/]"
     $yn = { param($b) if ($b) { "Yes" } else { "No (skipped)" } }
     $claude = $Config.Claude
+
+    # The statusline row carries a source and a size, so $yn is not expressive enough.
+    $statusLineValue = if ($claude -and $claude.InstallStatusLine) {
+        $src = if ($claude.StatusLineMode -eq 'Keep') { "keep existing" } else { "fresh from upstream" }
+        "Yes ($src, size $($claude.StatusLineSize))"
+    } else {
+        "No (skipped)"
+    }
     $claudeData = @(
         [PSCustomObject]@{ Setting = "Agents";   Value = (& $yn ($claude -and $claude.InstallAgents)) }
         [PSCustomObject]@{ Setting = "Skills";    Value = (& $yn ($claude -and $claude.InstallSkills)) }
         [PSCustomObject]@{ Setting = "Commands";  Value = (& $yn ($claude -and $claude.InstallCommands)) }
         [PSCustomObject]@{ Setting = "CLAUDE.md"; Value = (& $yn ($claude -and $claude.InstallClaudeMd)) }
         [PSCustomObject]@{ Setting = "Herdr config"; Value = (& $yn ($claude -and $claude.InstallHerdr)) }
+        [PSCustomObject]@{ Setting = "Statusline"; Value = $statusLineValue }
     )
     $claudeData | Format-SpectreTable -Border Rounded -Color Blue | Out-Host
 }

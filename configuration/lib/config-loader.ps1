@@ -231,7 +231,8 @@ function Get-ExistingClaudeConfig {
         Detects existing Claude Code / herdr configuration
     .OUTPUTS
         Hashtable with Found, ClaudeMdFound, SettingsFound, HerdrHookPresent,
-        HerdrConfigFound, ClaudeInstalled
+        HerdrConfigFound, ClaudeInstalled, StatusLineScriptFound, StatusLineWired,
+        StatusLineSize
     #>
 
     $result = @{
@@ -241,12 +242,16 @@ function Get-ExistingClaudeConfig {
         HerdrHookPresent = $false
         HerdrConfigFound = $false
         ClaudeInstalled = $false
+        StatusLineScriptFound = $false
+        StatusLineWired = $false
+        StatusLineSize = ''
     }
 
     $claudeRoot = Join-Path $env:USERPROFILE ".claude"
     $result.Found = Test-Path $claudeRoot
     $result.ClaudeMdFound = Test-Path (Join-Path $claudeRoot "CLAUDE.md")
     $result.HerdrConfigFound = Test-Path (Join-Path $env:APPDATA "herdr\config.toml")
+    $result.StatusLineScriptFound = Test-Path (Join-Path $claudeRoot "awesome-statusline.ps1")
 
     $settingsPath = Join-Path $claudeRoot "settings.json"
     if (Test-Path $settingsPath) {
@@ -255,6 +260,10 @@ function Get-ExistingClaudeConfig {
             $raw = Get-Content $settingsPath -Raw -ErrorAction SilentlyContinue
             if ($raw -and $raw -match 'herdr-agent-state\.ps1') {
                 $result.HerdrHookPresent = $true
+            }
+            if ($raw -and $raw -match 'awesome-statusline\.ps1') {
+                $result.StatusLineWired = $true
+                if ($raw -match '-Size\s+([a-z]+)') { $result.StatusLineSize = $Matches[1] }
             }
         } catch {
             Write-Warning "Error parsing Claude settings.json: $_"
@@ -422,6 +431,11 @@ function Get-ExistingConfiguration {
             # Set by the wizard only when the user agrees to replace a drifted
             # ~/.claude/CLAUDE.md - see Test-DevkitClaudeMdDrift.
             ForceClaudeMd   = $false
+            # Opt-in by default, unlike its siblings: the statusline is the only area
+            # that downloads third-party code over the network.
+            InstallStatusLine = $false
+            StatusLineSize    = 'small'
+            StatusLineMode    = 'Fresh'
         }
         _Detection = @{
             GitConfigFound = $false
@@ -435,6 +449,9 @@ function Get-ExistingConfiguration {
             ClaudeSettingsFound = $false
             HerdrHookPresent = $false
             HerdrConfigFound = $false
+            StatusLineFound = $false
+            StatusLineScriptFound = $false
+            StatusLineSize = ''
         }
     }
 
@@ -474,6 +491,9 @@ function Get-ExistingConfiguration {
     $config._Detection.ClaudeSettingsFound = $claudeConfig.SettingsFound
     $config._Detection.HerdrHookPresent = $claudeConfig.HerdrHookPresent
     $config._Detection.HerdrConfigFound = $claudeConfig.HerdrConfigFound
+    $config._Detection.StatusLineFound = $claudeConfig.StatusLineWired
+    $config._Detection.StatusLineScriptFound = $claudeConfig.StatusLineScriptFound
+    $config._Detection.StatusLineSize = $claudeConfig.StatusLineSize
 
     # Load Devkit variables
     $devkitVars = Get-ExistingDevkitVariables -DevkitRoot $DevkitRoot

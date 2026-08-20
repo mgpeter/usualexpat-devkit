@@ -421,6 +421,14 @@ function New-DevkitConfig {
             InstallCommands = $true
             InstallClaudeMd = $true
             InstallHerdr    = $true   # settings.json hook merge + config.toml
+            # Set by the wizard only when the user agrees to replace a drifted
+            # ~/.claude/CLAUDE.md - see Test-DevkitClaudeMdDrift.
+            ForceClaudeMd   = $false
+            # Opt-in by default, unlike its siblings: the statusline is the only area
+            # that downloads third-party code over the network.
+            InstallStatusLine = $false
+            StatusLineSize    = 'small'
+            StatusLineMode    = 'Fresh'
         }
         InstallPath = ""
         BackupPath = ""

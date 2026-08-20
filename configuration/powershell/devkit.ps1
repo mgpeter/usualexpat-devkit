@@ -70,10 +70,12 @@ $script:DevkitRegistry = @{
         @{ Key = '<leader>do'; Description = 'easy-dotnet: outdated packages' }
     )
 
-    # Claude Code + Herdr assets bundled by the installer (a051f98). Installed to
+    # Claude Code + Herdr assets installed by the installer (a051f98). Installed to
     # ~/.claude/ (agents|commands|skills|CLAUDE.md|hooks + a settings.json hook)
     # and %APPDATA%\herdr\config.toml. These are hand-maintained; keep in sync
     # with configuration/claude/* and configuration/herdr/config.toml.
+    # The 'statusline' rows are the exception: that renderer is NOT bundled in this
+    # repo, it is downloaded from AwesomeJun/CC-statusline at install time.
     ClaudeHerdr = @(
         @{ Name = 'CLAUDE.md';                 Kind = 'claude';      Description = 'Global Claude Code instructions -> ~/.claude/CLAUDE.md' }
         @{ Name = 'architect';                 Kind = 'agent';       Description = 'Subagent: plan/design software projects' }
@@ -93,10 +95,12 @@ $script:DevkitRegistry = @{
         @{ Name = 'spin-up-herd';              Kind = 'skill';       Description = 'Skill: fan a herd of Claude agents into a tab' }
         @{ Name = 'herdr SessionStart hook';   Kind = 'integration'; Description = 'Reports Claude sessions to Herdr panes (settings.json)' }
         @{ Name = 'Herdr config.toml';         Kind = 'integration'; Description = 'Herdr app config -> %APPDATA%\herdr\config.toml' }
+        @{ Name = 'Awesome Statusline';        Kind = 'statusline';  Description = 'Third-party renderer (AwesomeJun/CC-statusline) -> ~/.claude/awesome-statusline.ps1' }
+        @{ Name = 'statusLine setting';        Kind = 'statusline';  Description = 'Wires the renderer into ~/.claude/settings.json with a size' }
     )
 
     Commands = @(
-        @{ Name = 'devkit help [topic]';            Description = 'This help, or one section (modules|aliases|keymaps|functions|git|nvim|claude|herdr|env|commands)' }
+        @{ Name = 'devkit help [topic]';            Description = 'This help, or one section (modules|aliases|keymaps|functions|git|nvim|claude|herdr|statusline|env|commands)' }
         @{ Name = 'devkit version';                 Description = 'Devkit version + install paths' }
         @{ Name = 'devkit doctor';                  Description = 'Run health checks' }
         @{ Name = 'devkit find <keyword>';          Description = 'Search inventory for matching rows' }
@@ -104,6 +108,11 @@ $script:DevkitRegistry = @{
         @{ Name = 'devkit nvim refresh';            Description = 'Re-copy the bundled Neovim config' }
         @{ Name = 'devkit claude refresh [--force]'; Description = 'Re-copy bundled Claude Code assets into ~/.claude (--force replaces a drifted CLAUDE.md)' }
         @{ Name = 'devkit herdr refresh';           Description = 'Re-write %APPDATA%\herdr\config.toml' }
+        @{ Name = 'devkit statusline status';       Description = 'Show the Claude Code statusline install state' }
+        @{ Name = 'devkit statusline install';      Description = 'Download the Awesome Statusline renderer from upstream and wire it in' }
+        @{ Name = 'devkit statusline refresh';      Description = 'Re-download the renderer, keeping the current size' }
+        @{ Name = 'devkit statusline size <mode>';  Description = 'Change size (xsmall|small|medium|large|xlarge) without downloading' }
+        @{ Name = 'devkit statusline remove';       Description = 'Unwire the statusline (--keep-script leaves the renderer)' }
         @{ Name = 'devkit backups list';            Description = 'List ~/.devkit/backups/' }
         @{ Name = 'devkit backups restore <name>';  Description = 'Restore a backup file or directory' }
         @{ Name = 'devkit fix terminal-icons';      Description = 'Purge corrupt Terminal-Icons CLIXML cache' }
@@ -249,6 +258,14 @@ function _Devkit-ClaudeHerdrPresence {
             }
             return (Test-Path (Join-Path $claudeRoot 'hooks\herdr-agent-state.ps1'))
         }
+        'statusline'  {
+            if ($Row.Name -match 'setting') {
+                $s = Join-Path $claudeRoot 'settings.json'
+                if (-not (Test-Path $s)) { return $false }
+                return ((Get-Content $s -Raw -ErrorAction SilentlyContinue) -match 'awesome-statusline\.ps1')
+            }
+            return (Test-Path (Join-Path $claudeRoot 'awesome-statusline.ps1'))
+        }
         default { return $false }
     }
 }
@@ -262,7 +279,7 @@ function _Devkit-PrintClaudeHerdr {
         Write-Host "  $marker " -ForegroundColor $color -NoNewline
         _Devkit-WriteRow -Left $r.Name -Right $r.Description -Pad 24
     }
-    _Devkit-WriteDim "  (✓ installed / ✗ not found)  refresh with: devkit claude refresh | devkit herdr refresh"
+    _Devkit-WriteDim "  (✓ installed / ✗ not found)  refresh with: devkit claude refresh | devkit herdr refresh | devkit statusline refresh"
 }
 
 #endregion
@@ -300,11 +317,12 @@ function Show-DevkitHelp {
         'nvim'      { _Devkit-PrintNvimKeymaps }
         'claude'    { _Devkit-PrintClaudeHerdr }
         'herdr'     { _Devkit-PrintClaudeHerdr }
+        'statusline' { _Devkit-PrintClaudeHerdr }
         'env'       { _Devkit-PrintEnv }
         'commands'  { _Devkit-PrintCommands }
         default {
             Write-Warning "Unknown topic: $Topic"
-            Write-Host "  Topics: modules, aliases, keymaps, functions, git, nvim, claude, herdr, env, commands" -ForegroundColor DarkGray
+            Write-Host "  Topics: modules, aliases, keymaps, functions, git, nvim, claude, herdr, statusline, env, commands" -ForegroundColor DarkGray
         }
     }
     Write-Host ""
@@ -518,6 +536,38 @@ function Invoke-DevkitDoctor {
         _Devkit-CheckResult WARN 'Herdr config.toml missing' -Hint 'Run: devkit herdr refresh'
     }
 
+    # 13. Statusline renderer present (and carrying its UTF-8 BOM)
+    $statusLineScript = Join-Path $claudeRoot 'awesome-statusline.ps1'
+    if (Test-Path $statusLineScript) {
+        # The BOM is intentional upstream: without it Windows PowerShell mis-decodes
+        # the block glyphs under a non-UTF-8 locale and the bars render as mojibake.
+        $bom = Get-Content -Path $statusLineScript -AsByteStream -TotalCount 3 -ErrorAction SilentlyContinue
+        if ($bom.Count -eq 3 -and $bom[0] -eq 0xEF -and $bom[1] -eq 0xBB -and $bom[2] -eq 0xBF) {
+            _Devkit-CheckResult OK 'Statusline renderer present' -Detail 'awesome-statusline.ps1'
+        } else {
+            _Devkit-CheckResult WARN 'Statusline renderer has no UTF-8 BOM; glyphs may render as mojibake' -Hint 'Run: devkit statusline refresh'
+        }
+    } else {
+        _Devkit-CheckResult WARN 'Statusline renderer missing' -Hint 'Run: devkit statusline install'
+    }
+
+    # 14. statusLine wired in settings.json, and the wired path actually resolves
+    if (Test-Path $claudeSettings) {
+        $slRaw = Get-Content $claudeSettings -Raw -ErrorAction SilentlyContinue
+        if ($slRaw -match 'awesome-statusline\.ps1') {
+            $slSize = if ($slRaw -match '-Size\s+([a-z]+)') { $Matches[1] } else { 'default' }
+            $slPath = if ($slRaw -match '-File\s+\\?"([^"\\]+awesome-statusline\.ps1)') { $Matches[1] } else { '' }
+            if ($slPath -and -not (Test-Path $slPath)) {
+                # Typically a path copied from another machine.
+                _Devkit-CheckResult WARN "statusLine wired but its script path does not resolve: $slPath" -Hint 'Run: devkit statusline install'
+            } else {
+                _Devkit-CheckResult OK 'statusLine wired in settings.json' -Detail "size $slSize"
+            }
+        } else {
+            _Devkit-CheckResult WARN 'settings.json present but statusLine not wired' -Hint 'Run: devkit statusline install'
+        }
+    }
+
     Write-Host ""
 }
 
@@ -729,20 +779,33 @@ function Invoke-DevkitNvim {
 #region Subcommand: claude / herdr
 
 function _Devkit-ResolveGenerator {
-    # Shared guard + dot-source for the refresh commands that reuse the
-    # installer's copy helpers. Returns the config-generator.ps1 path, or $null.
+    # Shared guard for the refresh commands that reuse the installer's helpers.
+    # Returns the ORDERED list of lib files the caller must dot-source, or $null.
+    #
+    # config-generator.ps1 is not self-contained: its copy/install helpers call
+    # Backup-ConfigFile (backup.ps1) and Test-PwshAvailable (validators.ps1). Loading
+    # it alone makes every backup fail at runtime with "term not recognized", which is
+    # caught by the helpers' try/catch and surfaces only as a warning - so the refresh
+    # appears to work while silently skipping its backup. Keep all three.
     if (-not $env:DEVKIT_REPO_ROOT -or -not (Test-Path $env:DEVKIT_REPO_ROOT)) {
         Write-Host "ERROR: " -ForegroundColor Red -NoNewline
         Write-Host '$env:DEVKIT_REPO_ROOT is not set or does not exist.'
         return $null
     }
-    $libPath = Join-Path $env:DEVKIT_REPO_ROOT 'configuration\lib\config-generator.ps1'
-    if (-not (Test-Path $libPath)) {
-        Write-Host "ERROR: " -ForegroundColor Red -NoNewline
-        Write-Host "config-generator.ps1 not found at: $libPath"
-        return $null
+
+    $libDir = Join-Path $env:DEVKIT_REPO_ROOT 'configuration\lib'
+    $needed = @('validators.ps1', 'backup.ps1', 'config-generator.ps1')
+    $paths = @()
+    foreach ($name in $needed) {
+        $full = Join-Path $libDir $name
+        if (-not (Test-Path $full)) {
+            Write-Host "ERROR: " -ForegroundColor Red -NoNewline
+            Write-Host "$name not found at: $full"
+            return $null
+        }
+        $paths += $full
     }
-    return $libPath
+    return $paths
 }
 
 function Invoke-DevkitClaude {
@@ -757,9 +820,9 @@ function Invoke-DevkitClaude {
 
     switch ($Action) {
         'refresh' {
-            $libPath = _Devkit-ResolveGenerator
-            if (-not $libPath) { return }
-            . $libPath
+            $libPaths = _Devkit-ResolveGenerator
+            if (-not $libPaths) { return }
+            foreach ($lib in $libPaths) { . $lib }
 
             $force = @($Rest) -contains '--force' -or @($Rest) -contains '-Force'
             $root = $env:DEVKIT_REPO_ROOT
@@ -795,9 +858,9 @@ function Invoke-DevkitHerdr {
 
     switch ($Action) {
         'refresh' {
-            $libPath = _Devkit-ResolveGenerator
-            if (-not $libPath) { return }
-            . $libPath
+            $libPaths = _Devkit-ResolveGenerator
+            if (-not $libPaths) { return }
+            foreach ($lib in $libPaths) { . $lib }
 
             Save-HerdrConfig -SourceRoot $env:DEVKIT_REPO_ROOT
             Write-Host "Refreshed Herdr config at " -NoNewline
@@ -805,6 +868,103 @@ function Invoke-DevkitHerdr {
         }
         default {
             Write-Warning "Usage: devkit herdr refresh"
+        }
+    }
+}
+
+function Invoke-DevkitStatusline {
+    <#
+        Deliberately separate from 'devkit claude refresh': that command is offline and
+        repo-sourced, while this one reaches out to GitHub. Folding them together would
+        make every asset refresh depend on network availability.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string]$Action,
+
+        [Parameter(ValueFromRemainingArguments)]
+        [string[]]$Rest
+    )
+
+    $sizes = @('xsmall', 'small', 'medium', 'large', 'xlarge')
+    if (-not $Action) { $Action = 'status' }
+
+    # --size <mode>, or a bare mode after 'size'
+    $requestedSize = ''
+    $rest = @($Rest)
+    for ($i = 0; $i -lt $rest.Count; $i++) {
+        if ($rest[$i] -eq '--size' -and ($i + 1) -lt $rest.Count) { $requestedSize = $rest[$i + 1] }
+    }
+    if ($Action -eq 'size' -and $rest.Count -ge 1 -and $rest[0] -ne '--size') { $requestedSize = $rest[0] }
+    if ($requestedSize -and $sizes -notcontains $requestedSize) {
+        Write-Warning "Unknown size '$requestedSize'. Valid sizes: $($sizes -join ', ')"
+        return
+    }
+
+    $libPaths = _Devkit-ResolveGenerator
+    if (-not $libPaths) { return }
+    foreach ($lib in $libPaths) { . $lib }
+
+    $state = Test-ClaudeStatusLinePresent
+    # A refresh must not silently resize a working statusline.
+    $effectiveSize = if ($requestedSize) { $requestedSize }
+                     elseif ($state.Size -and $sizes -contains $state.Size) { $state.Size }
+                     else { 'small' }
+
+    switch ($Action.ToLower()) {
+        'status' {
+            _Devkit-WriteSection "STATUSLINE"
+            $rendererPath = Get-ClaudeStatusLinePath
+            _Devkit-WriteRow -Left 'Renderer'   -Right $rendererPath -Pad 20
+            _Devkit-WriteRow -Left 'On disk'    -Right $(if ($state.ScriptFound) { 'yes' } else { 'no' }) -Pad 20
+            _Devkit-WriteRow -Left 'Wired'      -Right $(if ($state.SettingWired) { 'yes' } else { 'no' }) -Pad 20
+            _Devkit-WriteRow -Left 'Size'       -Right $(if ($state.Size) { $state.Size } else { '(none)' }) -Pad 20
+            if ($state.SettingWired) {
+                _Devkit-WriteRow -Left 'Wired path' -Right $(if ($state.Command) { $state.Command } else { '(unparsed)' }) -Pad 20
+                _Devkit-WriteRow -Left 'Path resolves' -Right $(if ($state.ScriptPathResolves) { 'yes' } else { 'NO - run: devkit statusline install' }) -Pad 20
+            }
+            Write-Host ""
+        }
+        'install' {
+            if (Install-ClaudeStatusLine -Size $effectiveSize -Mode Fresh) {
+                Write-Host "Installed Awesome Statusline (size $effectiveSize) at " -NoNewline
+                Write-Host (Get-ClaudeStatusLinePath) -ForegroundColor Green
+            } else {
+                Write-Warning "Statusline install did not complete. See the warnings above."
+            }
+        }
+        'refresh' {
+            if (Install-ClaudeStatusLine -Size $effectiveSize -Mode Fresh) {
+                Write-Host "Refreshed Awesome Statusline (size $effectiveSize) at " -NoNewline
+                Write-Host (Get-ClaudeStatusLinePath) -ForegroundColor Green
+            } else {
+                Write-Warning "Statusline refresh did not complete. See the warnings above."
+            }
+        }
+        'size' {
+            if (-not $requestedSize) {
+                Write-Warning "Usage: devkit statusline size <$($sizes -join '|')>"
+                return
+            }
+            if (-not $state.ScriptFound) {
+                Write-Warning "No renderer at $(Get-ClaudeStatusLinePath). Run: devkit statusline install"
+                return
+            }
+            if (Set-ClaudeStatusLineSetting -RendererPath (Get-ClaudeStatusLinePath) -Size $requestedSize) {
+                Write-Host "Statusline size set to " -NoNewline
+                Write-Host $requestedSize -ForegroundColor Green
+            }
+        }
+        'remove' {
+            $keep = $rest -contains '--keep-script'
+            if (Remove-ClaudeStatusLine -KeepRenderer:$keep) {
+                Write-Host "Removed the statusLine wiring" -NoNewline
+                if ($keep) { Write-Host " (renderer left on disk)." } else { Write-Host " and the renderer." }
+            }
+        }
+        default {
+            Write-Warning "Usage: devkit statusline status|install|refresh|size <mode>|remove [--size <mode>] [--keep-script]"
         }
     }
 }
@@ -910,6 +1070,7 @@ function Invoke-DevkitBackups {
                 '^powershell-profile_'   { $dest = $PROFILE; break }
                 '^claude-md_'            { $dest = Join-Path $env:USERPROFILE '.claude\CLAUDE.md'; break }
                 '^claude-settings_'      { $dest = Join-Path $env:USERPROFILE '.claude\settings.json'; break }
+                '^claude-statusline_'    { $dest = Join-Path $env:USERPROFILE '.claude\awesome-statusline.ps1'; break }
                 '^herdr-config_'         { $dest = Join-Path $env:APPDATA 'herdr\config.toml'; break }
                 '^claude_' {
                     $dest = Join-Path $env:USERPROFILE '.claude'
@@ -1034,6 +1195,7 @@ function devkit {
         'nvim'    { Invoke-DevkitNvim @Rest }
         'claude'  { Invoke-DevkitClaude @Rest }
         'herdr'   { Invoke-DevkitHerdr @Rest }
+        'statusline' { Invoke-DevkitStatusline @Rest }
         'backups' { Invoke-DevkitBackups @Rest }
         'fix'     { Invoke-DevkitFix @Rest }
         default {
@@ -1063,19 +1225,23 @@ Register-ArgumentCompleter -CommandName devkit -ScriptBlock {
     switch ($position) {
         1 {
             # Top-level commands
-            $candidates = @('help', 'version', 'doctor', 'find', 'update', 'nvim', 'claude', 'herdr', 'backups', 'fix')
+            $candidates = @('help', 'version', 'doctor', 'find', 'update', 'nvim', 'claude', 'herdr', 'statusline', 'backups', 'fix')
         }
         2 {
             switch ($tokens[1].ToLower()) {
-                'help'    { $candidates = @('modules', 'aliases', 'keymaps', 'functions', 'git', 'nvim', 'claude', 'herdr', 'env', 'commands') }
+                'help'    { $candidates = @('modules', 'aliases', 'keymaps', 'functions', 'git', 'nvim', 'claude', 'herdr', 'statusline', 'env', 'commands') }
                 'nvim'    { $candidates = @('refresh') }
                 'claude'  { $candidates = @('refresh', '--force') }
                 'herdr'   { $candidates = @('refresh') }
+                'statusline' { $candidates = @('status', 'install', 'refresh', 'size', 'remove', '--size', '--keep-script') }
                 'backups' { $candidates = @('list', 'restore') }
                 'fix'     { $candidates = @('terminal-icons') }
             }
         }
         3 {
+            if ($tokens[1].ToLower() -eq 'statusline' -and $tokens[2].ToLower() -in @('size', '--size')) {
+                $candidates = @('xsmall', 'small', 'medium', 'large', 'xlarge')
+            }
             if ($tokens[1].ToLower() -eq 'backups' -and $tokens[2].ToLower() -eq 'restore') {
                 $backupRoot = Join-Path $env:USERPROFILE '.devkit\backups'
                 if (Test-Path $backupRoot) {

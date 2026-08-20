@@ -1270,6 +1270,369 @@ function Save-HerdrConfig {
 
 #endregion
 
+#region Claude Statusline
+
+# Awesome Statusline (AwesomeJun/CC-statusline, MIT) is third-party code fetched
+# from GitHub at install time. It is deliberately NOT vendored into this repo:
+# the user asked for a fresh upstream copy, and vendoring would create a
+# permanent drift-maintenance surface plus an attribution obligation.
+$script:AwesomeStatusLineFileName   = 'awesome-statusline.ps1'
+$script:AwesomeStatusLineRepoRaw    = 'https://raw.githubusercontent.com/AwesomeJun/CC-statusline'
+$script:AwesomeStatusLineScriptPath = 'scripts/awesome-statusline-windows.ps1'
+$script:AwesomeStatusLineSizes      = @('xsmall', 'small', 'medium', 'large', 'xlarge')
+
+function Get-ClaudeStatusLinePath {
+    <#
+    .SYNOPSIS
+        Returns the installed path of the Awesome Statusline renderer
+    .OUTPUTS
+        String - Path to ~/.claude/awesome-statusline.ps1
+    #>
+    return Join-Path (Get-ClaudeUserRoot) $script:AwesomeStatusLineFileName
+}
+
+function Remove-Utf8BomChar {
+    <#
+    .SYNOPSIS
+        Strips a leading U+FEFF character from text
+    .DESCRIPTION
+        Upstream ships the renderer as UTF-8 WITH a BOM, and Invoke-WebRequest hands
+        that BOM back as a literal U+FEFF CHARACTER rather than consuming it (likewise
+        Get-Content -Raw on some hosts). Since the installer writes the file with a BOM
+        of its own, the character has to go or the file lands with a DOUBLE BOM -
+        three stray bytes plus a stray U+FEFF at the top of the script.
+    .PARAMETER Text
+        Text that may begin with a BOM character
+    .OUTPUTS
+        String - Text without a leading U+FEFF
+    #>
+    param([string]$Text)
+
+    if ($Text -and $Text[0] -eq [char]0xFEFF) { return $Text.Substring(1) }
+    return $Text
+}
+
+function Get-AwesomeStatusLineSource {
+    <#
+    .SYNOPSIS
+        Fetches the Awesome Statusline renderer source text
+    .DESCRIPTION
+        THE SINGLE NETWORK SEAM for the statusline feature. Install-ClaudeStatusLine
+        calls this BY NAME so the test harness can shadow it and run offline - do not
+        inline Invoke-WebRequest into the caller.
+
+        Resolution order:
+          1. $env:DEVKIT_STATUSLINE_SOURCE pointing at an existing file (offline/proxy escape hatch)
+          2. -RawBaseUrl, else $env:AWESOME_STATUSLINE_RAW (upstream's own variable), else the repo raw URL
+    .PARAMETER RawBaseUrl
+        Overrides the raw base URL (without the trailing script path)
+    .PARAMETER Ref
+        Git ref to fetch from. Defaults to main; set to a tag such as v3.3.2 to pin.
+    .OUTPUTS
+        Hashtable - @{ Success; Content; Source; Error }. Never throws.
+    #>
+    param(
+        [string]$RawBaseUrl = '',
+        [string]$Ref = 'main'
+    )
+
+    $result = @{ Success = $false; Content = ''; Source = ''; Error = '' }
+
+    # 1. Local override wins, so an offline or proxied machine can still install.
+    if ($env:DEVKIT_STATUSLINE_SOURCE -and (Test-Path $env:DEVKIT_STATUSLINE_SOURCE)) {
+        try {
+            $result.Content = Remove-Utf8BomChar (Get-Content -Path $env:DEVKIT_STATUSLINE_SOURCE -Raw)
+            $result.Source = 'local-override'
+            $result.Success = $true
+            return $result
+        } catch {
+            $result.Error = "Failed to read DEVKIT_STATUSLINE_SOURCE: $_"
+            return $result
+        }
+    }
+
+    # 2. Resolve the base URL
+    $base = $RawBaseUrl
+    if (-not $base) { $base = $env:AWESOME_STATUSLINE_RAW }
+    if (-not $base) { $base = "$script:AwesomeStatusLineRepoRaw/$Ref" }
+    $uri = "$($base.TrimEnd('/'))/$script:AwesomeStatusLineScriptPath"
+
+    try {
+        $response = Invoke-WebRequest -Uri $uri -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop
+        $content = Remove-Utf8BomChar ([string]$response.Content)
+
+        # Sanity gate: a captive portal or GitHub error page can arrive as HTTP 200.
+        if ($content.Length -le 1000 -or $content -match '^\s*<(!DOCTYPE|html)') {
+            $result.Error = "Downloaded content from $uri does not look like the renderer script."
+            return $result
+        }
+        if ($content -notmatch 'param\(') {
+            # Soft warning only: an upstream refactor should not hard-block the install.
+            Write-Warning "Statusline renderer from $uri has no param() block; upstream may have changed."
+        }
+
+        $result.Content = $content
+        $result.Source = $uri
+        $result.Success = $true
+        return $result
+    } catch {
+        $result.Error = "$_"
+        return $result
+    }
+}
+
+function Set-ClaudeStatusLineSetting {
+    <#
+    .SYNOPSIS
+        Merges the statusLine key into ~/.claude/settings.json
+    .DESCRIPTION
+        Uses the same targeted-merge pattern as Install-HerdrHookAndSettings: the whole
+        document is loaded as mutable hashtables and exactly one key is reassigned, so
+        model, env, enabledPlugins, hooks and every other sibling survive untouched.
+
+        statusLine is a single object rather than an array, so plain assignment IS the
+        idempotent replacement - no de-dup loop is needed here.
+
+        The wired host is Windows PowerShell (powershell, not pwsh) on purpose: it is
+        what upstream targets, the renderer's UTF-8 BOM exists so 5.1 decodes its block
+        glyphs, and 5.1 cold-starts faster for something that runs on every render.
+    .PARAMETER RendererPath
+        Full path to the installed renderer script
+    .PARAMETER Size
+        Statusline size mode passed to the renderer
+    .OUTPUTS
+        Boolean - True if successful
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$RendererPath,
+
+        [Parameter(Mandatory)]
+        [ValidateSet('xsmall', 'small', 'medium', 'large', 'xlarge')]
+        [string]$Size
+    )
+
+    $claudeRoot = Get-ClaudeUserRoot
+    $settingsPath = Join-Path $claudeRoot "settings.json"
+
+    try {
+        if (-not (Test-Path $claudeRoot)) {
+            New-Item -Path $claudeRoot -ItemType Directory -Force | Out-Null
+        }
+
+        # Back up settings.json before touching it
+        Backup-ConfigFile -Path $settingsPath -Description "claude-settings" | Out-Null
+
+        # Load existing settings (mutable hashtables) or start fresh
+        $settings = @{}
+        if (Test-Path $settingsPath) {
+            $raw = Get-Content -Path $settingsPath -Raw
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $settings = $raw | ConvertFrom-Json -AsHashtable -Depth 20
+            }
+        }
+
+        # Forward slashes match what upstream writes and avoid backslash-escape noise in JSON.
+        $forward = $RendererPath -replace '\\', '/'
+        $settings['statusLine'] = @{
+            type    = 'command'
+            command = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$forward`" -Size $Size"
+        }
+
+        $json = $settings | ConvertTo-Json -Depth 20
+        Set-Content -Path $settingsPath -Value $json -Encoding UTF8 -Force
+        return $true
+    } catch {
+        Write-Warning "Failed to set statusLine in settings.json: $_"
+        return $false
+    }
+}
+
+function Install-ClaudeStatusLine {
+    <#
+    .SYNOPSIS
+        Installs the Awesome Statusline renderer and wires it into settings.json
+    .DESCRIPTION
+        Unlike its siblings in this file there is no -SourceRoot parameter, and that
+        asymmetry is deliberate: nothing is copied out of the devkit repo. Mode Fresh
+        downloads the renderer from upstream; Mode Keep reuses a renderer already on
+        disk (so a locally customized one is not clobbered) and only re-wires settings.
+
+        NEVER THROWS. Every path returns a boolean, because Invoke-Installation only
+        aborts the run on a thrown exception - a returned $false degrades to a warning.
+        An offline machine with no renderer deliberately leaves statusLine unwritten:
+        pointing Claude Code at a nonexistent file is worse than having no statusline.
+    .PARAMETER Size
+        Statusline size mode
+    .PARAMETER Mode
+        Fresh downloads from upstream; Keep reuses the renderer already installed
+    .PARAMETER RawBaseUrl
+        Overrides the raw base URL (passed through to Get-AwesomeStatusLineSource)
+    .PARAMETER Ref
+        Git ref to fetch from. Defaults to main; set to a tag such as v3.3.2 to pin.
+    .OUTPUTS
+        Boolean - True if the statusline ended up installed and wired
+    #>
+    param(
+        [ValidateSet('xsmall', 'small', 'medium', 'large', 'xlarge')]
+        [string]$Size = 'small',
+
+        [ValidateSet('Fresh', 'Keep')]
+        [string]$Mode = 'Fresh',
+
+        [string]$RawBaseUrl = '',
+
+        [string]$Ref = 'main'
+    )
+
+    try {
+        $claudeRoot = Get-ClaudeUserRoot
+        $rendererPath = Get-ClaudeStatusLinePath
+
+        if (-not (Test-Path $claudeRoot)) {
+            New-Item -Path $claudeRoot -ItemType Directory -Force | Out-Null
+        }
+
+        if ($Mode -eq 'Keep') {
+            if (-not (Test-Path $rendererPath)) {
+                Write-Warning "Keep requested but no renderer at $rendererPath. Run with -Mode Fresh to download one."
+                return $false
+            }
+            return (Set-ClaudeStatusLineSetting -RendererPath $rendererPath -Size $Size)
+        }
+
+        # Mode Fresh: fetch from upstream via the single network seam.
+        $src = Get-AwesomeStatusLineSource -RawBaseUrl $RawBaseUrl -Ref $Ref
+        if (-not $src.Success) {
+            if (Test-Path $rendererPath) {
+                Write-Warning "Could not download the statusline renderer ($($src.Error)). Keeping the existing $rendererPath."
+                return (Set-ClaudeStatusLineSetting -RendererPath $rendererPath -Size $Size)
+            }
+            Write-Warning "Could not download the statusline renderer ($($src.Error)). Skipping - settings.json left unchanged."
+            Write-Warning "Workaround: point DEVKIT_STATUSLINE_SOURCE at a local copy, then run 'devkit statusline install'."
+            return $false
+        }
+
+        $priorContent = $null
+        if (Test-Path $rendererPath) {
+            $priorContent = Get-Content -Path $rendererPath -Raw
+        }
+
+        $backupPath = Backup-ConfigFile -Path $rendererPath -Description "claude-statusline"
+
+        # This function owns the on-disk format, so strip again here: the single-BOM
+        # invariant has to hold whatever the source handed back. The BOM itself is
+        # deliberate - without it Windows PowerShell mis-decodes the block/emoji glyphs
+        # under non-UTF-8 locales. Do NOT simplify this to Set-Content -Encoding UTF8.
+        $body = Remove-Utf8BomChar $src.Content
+        [System.IO.File]::WriteAllText($rendererPath, $body, (New-Object System.Text.UTF8Encoding($true)))
+
+        if ($null -ne $priorContent -and (Remove-Utf8BomChar $priorContent) -cne $body) {
+            if ($backupPath) {
+                Write-Warning "Your previous statusline renderer differed from upstream; the old copy is at $backupPath."
+            } else {
+                Write-Warning "Your previous statusline renderer differed from upstream and was replaced."
+            }
+        }
+
+        return (Set-ClaudeStatusLineSetting -RendererPath $rendererPath -Size $Size)
+    } catch {
+        Write-Warning "Failed to install the Claude statusline: $_"
+        return $false
+    }
+}
+
+function Test-ClaudeStatusLinePresent {
+    <#
+    .SYNOPSIS
+        Reports the live state of the Claude Code statusline install
+    .DESCRIPTION
+        Uses a cheap raw-text regex over settings.json rather than a full JSON parse,
+        matching the HerdrHookPresent convention in config-loader.ps1.
+    .OUTPUTS
+        Hashtable - @{ ScriptFound; SettingWired; Size; Command; ScriptPathResolves }
+    #>
+    $claudeRoot = Get-ClaudeUserRoot
+    $result = @{
+        ScriptFound        = $false
+        SettingWired       = $false
+        Size               = ''
+        Command            = ''
+        ScriptPathResolves = $false
+    }
+
+    try {
+        $result.ScriptFound = Test-Path (Get-ClaudeStatusLinePath)
+
+        $settingsPath = Join-Path $claudeRoot "settings.json"
+        if (Test-Path $settingsPath) {
+            $raw = Get-Content -Path $settingsPath -Raw -ErrorAction SilentlyContinue
+            if ($raw -and $raw -match 'awesome-statusline\.ps1') {
+                $result.SettingWired = $true
+                if ($raw -match '-Size\s+([a-z]+)') { $result.Size = $Matches[1] }
+                # settings.json is JSON, so the embedded quotes arrive backslash-escaped.
+                if ($raw -match '-File\s+\\?"([^"\\]+awesome-statusline\.ps1)') {
+                    $result.Command = $Matches[1]
+                    $result.ScriptPathResolves = Test-Path $Matches[1]
+                }
+            }
+        }
+    } catch {
+        Write-Warning "Failed to inspect statusline state: $_"
+    }
+
+    return $result
+}
+
+function Remove-ClaudeStatusLine {
+    <#
+    .SYNOPSIS
+        Removes the statusLine wiring and (optionally) the renderer
+    .DESCRIPTION
+        Upstream ships no uninstall, so the devkit provides one. Both the settings file
+        and the renderer are backed up before anything is removed.
+    .PARAMETER KeepRenderer
+        Leave ~/.claude/awesome-statusline.ps1 on disk; only unwire settings.json
+    .OUTPUTS
+        Boolean - True if successful
+    #>
+    param(
+        [switch]$KeepRenderer
+    )
+
+    $claudeRoot = Get-ClaudeUserRoot
+    $settingsPath = Join-Path $claudeRoot "settings.json"
+    $rendererPath = Get-ClaudeStatusLinePath
+
+    try {
+        if (Test-Path $settingsPath) {
+            Backup-ConfigFile -Path $settingsPath -Description "claude-settings" | Out-Null
+
+            $raw = Get-Content -Path $settingsPath -Raw
+            if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                $settings = $raw | ConvertFrom-Json -AsHashtable -Depth 20
+                if ($settings.ContainsKey('statusLine')) {
+                    $settings.Remove('statusLine')
+                    $json = $settings | ConvertTo-Json -Depth 20
+                    Set-Content -Path $settingsPath -Value $json -Encoding UTF8 -Force
+                }
+            }
+        }
+
+        if (-not $KeepRenderer -and (Test-Path $rendererPath)) {
+            Backup-ConfigFile -Path $rendererPath -Description "claude-statusline" | Out-Null
+            Remove-Item -Path $rendererPath -Force
+        }
+
+        return $true
+    } catch {
+        Write-Warning "Failed to remove the Claude statusline: $_"
+        return $false
+    }
+}
+
+#endregion
+
 # Functions exported when dot-sourced:
 # User Space:
 # - Get-DevkitUserRoot, Initialize-DevkitUserSpace
@@ -1280,6 +1643,10 @@ function Save-HerdrConfig {
 # - Copy-DevkitClaudeAgents, Copy-DevkitClaudeSkills, Copy-DevkitClaudeCommands, Copy-DevkitClaudeMd
 # - Test-DevkitClaudeMdDrift
 # - Install-HerdrHookAndSettings, Save-HerdrConfig
+# Claude Statusline:
+# - Get-ClaudeStatusLinePath, Remove-Utf8BomChar, Get-AwesomeStatusLineSource
+# - Install-ClaudeStatusLine, Set-ClaudeStatusLineSetting
+# - Test-ClaudeStatusLinePresent, Remove-ClaudeStatusLine
 # Git:
 # - New-GitConfig, Save-GitConfig, Get-UnmanagedGitConfigSections, New-GlobalGitIgnore
 # - Get-ProfileConfigFileName, New-GitProfileConfig, Save-GitProfileConfigs

@@ -30,7 +30,7 @@ Install these **before** running the wizard. [winget](https://learn.microsoft.co
 | PowerShell 7+ | The wizard and generated profile require it (`#Requires -Version 7.0`) | `winget install --id Microsoft.PowerShell -e` |
 | Git | Git config generation + aliases | `winget install --id Git.Git -e` |
 | Oh My Posh | The profile calls `oh-my-posh` by name to render the prompt | `winget install --id JanDeDobbeleer.OhMyPosh -e` |
-| A Nerd Font | Glyphs/icons in the prompt and Terminal-Icons | `oh-my-posh font install meslo` (after installing Oh My Posh), then set it as your terminal font |
+| A Nerd Font | Glyphs/icons in the prompt, Terminal-Icons, and the Claude statusline bars | `oh-my-posh font install meslo` (after installing Oh My Posh), then set it as your terminal font |
 
 > `PwshSpectreConsole` (the wizard UI) and the selected PowerShell modules (`z`, `posh-git`, `Terminal-Icons`, `PSReadLine`, …) are installed automatically from the PowerShell Gallery — no manual step and no `PATH` change.
 
@@ -43,6 +43,7 @@ Install these **before** running the wizard. [winget](https://learn.microsoft.co
 | Claude Code CLI | Using the Claude agents/skills/commands the wizard installs into `~/.claude` | Native (recommended): `irm https://claude.ai/install.ps1 \| iex` (installs to `%USERPROFILE%\.local\bin`) &nbsp;·&nbsp; or npm: `npm install -g @anthropic-ai/claude-code` |
 | Herdr | Using the herdr terminal-multiplexer configuration/skill | Windows: see [herdr.dev](https://herdr.dev) (installs to `%LOCALAPPDATA%\Programs\Herdr\bin`) &nbsp;·&nbsp; macOS/Linux: `brew install herdr` or `curl -fsSL https://herdr.dev/install.sh \| sh` |
 | glow | Rendering markdown in the terminal (READMEs, `CLAUDE.md`, notes) | `winget install --id charmbracelet.glow -e` |
+| Internet access at install time | Fetching the Awesome Statusline renderer from GitHub (the statusline area only) | Nothing to install; if offline, the step is skipped with a warning |
 
 > The wizard installs the Claude assets to `~/.claude` and writes the herdr config to `%APPDATA%\herdr` **regardless** of whether the Claude Code / Herdr binaries are present — but you need the respective CLI installed to actually use them.
 
@@ -112,19 +113,40 @@ After installation, an in-shell `devkit` command is auto-loaded by your PowerShe
 
 | Command | What it does |
 | --- | --- |
-| `devkit help [topic]` | Full inventory, or one section: `modules`, `aliases`, `keymaps`, `functions`, `git`, `nvim`, `claude`, `herdr`, `env`, `commands` |
+| `devkit help [topic]` | Full inventory, or one section: `modules`, `aliases`, `keymaps`, `functions`, `git`, `nvim`, `claude`, `herdr`, `statusline`, `env`, `commands` |
 | `devkit version` | Devkit version + install paths |
-| `devkit doctor` | Health checks: profile wiring, modules, tools on `PATH`, nvim/OMP config, **and the Claude/Herdr install** (`~/.claude/CLAUDE.md`, the herdr `SessionStart` hook, the hook script, and `%APPDATA%\herdr\config.toml`) |
-| `devkit find <keyword>` | Search the whole inventory — modules, aliases, keybindings, functions, git aliases, nvim keymaps, and bundled Claude agents/commands/skills |
+| `devkit doctor` | Health checks: profile wiring, modules, tools on `PATH`, nvim/OMP config, **the Claude/Herdr install** (`~/.claude/CLAUDE.md`, the herdr `SessionStart` hook, the hook script, and `%APPDATA%\herdr\config.toml`), **and the statusline** (renderer present with its UTF-8 BOM, `statusLine` wired and its script path resolving) |
+| `devkit find <keyword>` | Search the whole inventory — modules, aliases, keybindings, functions, git aliases, nvim keymaps, bundled Claude agents/commands/skills, and the statusline |
 | `devkit update` | Re-run the installation wizard |
 | `devkit nvim refresh` | Re-copy the bundled Neovim config |
 | `devkit claude refresh [--force]` | Re-copy the bundled Claude assets into `~/.claude` (agents, commands, skills, `CLAUDE.md`, herdr hook). A `CLAUDE.md` that differs from the bundled copy is left alone; `--force` replaces it (after a backup) |
 | `devkit herdr refresh` | Re-write `%APPDATA%\herdr\config.toml` |
+| `devkit statusline status` | Show the statusline state: renderer path, whether it is on disk, wired, its size, and whether the wired path resolves |
+| `devkit statusline install` / `refresh` | Download the Awesome Statusline renderer from upstream and wire it into `settings.json`. Add `--size <mode>`; without it, a refresh keeps the size you already run |
+| `devkit statusline size <mode>` | Change the size (`xsmall`, `small`, `medium`, `large`, `xlarge`) without downloading anything |
+| `devkit statusline remove` | Unwire the statusline and delete the renderer (both backed up first). `--keep-script` leaves the renderer on disk |
 | `devkit backups list` | List timestamped backups in `~/.devkit/backups/` |
-| `devkit backups restore <name>` | Restore a backup; the destination is inferred from the name (nvim, gitconfig, PowerShell profile, `CLAUDE.md`, `settings.json`, herdr `config.toml`, or a `~/.claude` snapshot merged in non-destructively) |
+| `devkit backups restore <name>` | Restore a backup; the destination is inferred from the name (nvim, gitconfig, PowerShell profile, `CLAUDE.md`, `settings.json`, the statusline renderer, herdr `config.toml`, or a `~/.claude` snapshot merged in non-destructively) |
 | `devkit fix terminal-icons` | Purge a corrupt Terminal-Icons icon cache |
 
 > `devkit help` shows a live ✓/✗ next to each Claude/Herdr asset so you can see at a glance what is installed. The `refresh` commands and `backups restore` read the repo path from `$env:DEVKIT_REPO_ROOT` (recorded at install time); if the repo has moved, they print a clear error and everything else keeps working.
+
+#### Claude Code Statusline
+
+The wizard can install [Awesome Statusline](https://github.com/AwesomeJun/CC-statusline) (`AwesomeJun/CC-statusline`, MIT) — a status line for Claude Code showing the model, git state, cwd, cost, and gradient bars for context use and the 5-hour / 7-day rate limits.
+
+It is **third-party code that is not bundled in this repo**. The wizard downloads a fresh copy from upstream at install time and writes it to `~/.claude/awesome-statusline.ps1`, then wires `statusLine` into `~/.claude/settings.json` — every other setting in that file (model, env, plugins, your existing hooks) is preserved. If a renderer is already present, the wizard offers to keep it instead of overwriting; either way the current file is backed up to `~/.devkit/backups/` first.
+
+Five sizes are available — `xsmall` and `small` render two lines, `medium` four, `large` and `xlarge` five (the larger modes add cost, duration, and the rate-limit bars). The wizard defaults to whichever size you already run, or `small` on a fresh machine.
+
+```powershell
+devkit statusline status          # what is installed and wired
+devkit statusline refresh         # re-download upstream, keep the current size
+devkit statusline size large      # resize, no download
+devkit statusline remove          # unwire and delete (--keep-script keeps the file)
+```
+
+The renderer needs no Node, bun, or jq — it is native PowerShell reading Claude Code's JSON from stdin. Installing offline is not fatal: the step is skipped with a warning, and `$env:DEVKIT_STATUSLINE_SOURCE` can point at a local copy if GitHub is unreachable.
 
 ### PowerShell Features
 
