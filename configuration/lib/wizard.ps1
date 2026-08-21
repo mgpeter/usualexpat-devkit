@@ -9,11 +9,15 @@
     interactive installation experience.
 #>
 
+# The single place the wizard's step count lives. Show-StepHeader defaults to it and
+# every call site passes it, so inserting a step is a one-line change here.
+$script:WizardTotalSteps = 11
+
 # Wizard state
 $script:WizardState = @{
     Mode = $null  # "Fresh" or "Update"
     CurrentStep = 0
-    TotalSteps = 10
+    TotalSteps = $script:WizardTotalSteps
     Config = @{
         RepoLocations = @()
         Git = @{
@@ -110,7 +114,7 @@ function Show-StepHeader {
         [Parameter(Mandatory)]
         [string]$StepTitle,
 
-        [int]$TotalSteps = 10
+        [int]$TotalSteps = $script:WizardTotalSteps
     )
 
     # Use escaped brackets for Spectre markup - [[ and ]] render as literal [ and ]
@@ -137,6 +141,252 @@ function Get-Confirmation {
     )
 
     return Read-SpectreConfirm -Prompt $Question -DefaultAnswer ($DefaultYes ? "y" : "n")
+}
+
+#endregion
+
+#region Prerequisites Step
+
+# Nerd Fonts offered when none is installed. Meslo is first because
+# Read-SpectreSelection/MultiSelection highlight index 0 and README names it.
+$script:AvailableNerdFonts = @('meslo', 'CascadiaCode', 'FiraCode', 'JetBrainsMono', 'Hack')
+
+function Show-PrerequisitesStep {
+    <#
+    .SYNOPSIS
+        Wizard step for installing missing prerequisite tools
+    .DESCRIPTION
+        UNLIKE EVERY OTHER STEP, this one performs its work immediately rather than
+        recording config for Invoke-Installation to apply later. That is deliberate: the
+        Git-editor step (Get-AvailableEditors) and the Oh-My-Posh theme scan both probe
+        the filesystem at PROMPT time, so a tool installed at the end of the wizard would
+        be invisible to them. Installing here, then refreshing PATH, makes the rest of
+        the run see the truth.
+
+        The consequence is that a user who cancels at the Review step keeps whatever was
+        installed here. Show-ConfigurationSummary and the cancel branch both say so.
+
+        Nothing is installed without an explicit opt-in plus an explicit tick.
+    .PARAMETER Config
+        Current DevkitConfig hashtable
+    .OUTPUTS
+        Updated configuration hashtable
+    #>
+    param(
+        [hashtable]$Config
+    )
+
+    Show-StepHeader -StepNumber 2 -StepTitle "Prerequisite Tools" -TotalSteps $script:WizardTotalSteps
+
+    Write-SpectreHost "The devkit configures these tools; it can also install the missing ones for you."
+    Write-SpectreHost "[dim]Installs run now, not at the end, so later steps can see the new tools.[/]"
+    Write-Host ""
+
+    # Seed the block even if config-loader did not populate it
+    if (-not $Config.ContainsKey('Prerequisites')) {
+        $Config.Prerequisites = @{
+            Install = $false; Selected = @(); Fonts = @()
+            Installed = @(); AlreadyInstalled = @(); Failed = @(); Skipped = @()
+            NeedsNewShell = @(); WingetAvailable = $false
+        }
+    }
+
+    $catalog = Get-DevkitPrerequisites
+    $state = Get-PrerequisiteState -Catalog $catalog
+
+    # --- Detection table -----------------------------------------------------
+    $rows = foreach ($row in $catalog) {
+        $entry = $state[$row.Key]
+        $status = if ($entry.Found) {
+            if ($row.Mechanism -eq 'omp-font' -and $entry.Confidence -ne 'strong') { "Possibly installed" } else { "Installed" }
+        } else { "Missing" }
+        $detail = if ($entry.Version) { $entry.Version } elseif ($entry.Path) { $entry.Path } else { $row.InstallHint }
+        [PSCustomObject]@{ Tool = $row.Name; Tier = $row.Tier; Status = $status; Detail = $detail }
+    }
+    $rows | Format-SpectreTable -Border Rounded -Color Blue | Out-Host
+
+    # --- winget availability -------------------------------------------------
+    $winget = Test-WingetAvailable
+    $Config.Prerequisites.WingetAvailable = $winget.Found
+    if ($winget.Found) {
+        Write-SpectreHost "[dim]winget $($winget.Version) at $($winget.Path)[/]"
+    } else {
+        Write-SpectreHost "[yellow]winget (App Installer) not found - most tools cannot be installed automatically.[/]"
+        Write-SpectreHost "[dim]Install 'App Installer' from the Microsoft Store, or install the tools by hand.[/]"
+    }
+    Write-Host ""
+
+    # Rows the wizard can act on: missing, and not owned by the installer bootstrap.
+    # A weak font hit counts as missing so it gets re-offered (a false positive costs
+    # the user their glyphs; a false negative costs a redundant download).
+    $missing = @($catalog | Where-Object {
+        $_.HandledBy -ne 'installer-bootstrap' -and (
+            -not $state[$_.Key].Found -or
+            ($_.Mechanism -eq 'omp-font' -and $state[$_.Key].Confidence -ne 'strong')
+        )
+    })
+
+    if ($missing.Count -eq 0) {
+        Write-SpectreHost "[green]All prerequisites are already installed.[/]"
+        $Config.Prerequisites.Install = $false
+        $Config.Prerequisites.AlreadyInstalled = @($catalog | Where-Object { $state[$_.Key].Found } | ForEach-Object { $_.Name })
+        Write-Host ""
+        return $Config
+    }
+
+    # --- Parent opt-in gate --------------------------------------------------
+    $requiredMissing = @($missing | Where-Object { $_.Tier -eq 'Required' })
+    $defaultAnswer = if ($requiredMissing.Count -gt 0) { "y" } else { "n" }
+
+    Write-SpectreHost "[yellow]$($missing.Count) prerequisite(s) are missing.[/]"
+    Write-SpectreHost "[dim]Each tool is installed with winget or its own installer. Nothing installs without an explicit tick on the next screen.[/]"
+    Write-Host ""
+
+    $Config.Prerequisites.Install = Read-SpectreConfirm -Prompt "Install missing prerequisites now?" -DefaultAnswer $defaultAnswer
+    if (-not $Config.Prerequisites.Install) {
+        Write-SpectreHost "[yellow]Skipping prerequisite installation.[/]"
+        if ($requiredMissing.Count -gt 0) {
+            Write-SpectreHost "[dim]Install these by hand before using the devkit:[/]"
+            foreach ($row in $requiredMissing) {
+                Write-SpectreHost "  [dim]$($row.InstallHint)[/]"
+            }
+        }
+        Write-Host ""
+        return $Config
+    }
+
+    # --- Selection -----------------------------------------------------------
+    # Already-installed tools are excluded from this list entirely rather than shown
+    # unticked: Read-SpectreMultiSelection cannot pre-select choices, so a mixed list
+    # would force the user to re-tick things they already have. They are in the table
+    # above instead. PreSelect therefore controls ordering and emphasis, not a tick.
+    Write-Host ""
+    Write-SpectreHost "[cyan]Select prerequisites to install:[/]"
+    Write-SpectreHost "[dim]Use Space to toggle, Enter to confirm. Already-installed tools are listed above and not repeated here.[/]"
+    Write-Host ""
+
+    $ordered = @($missing | Sort-Object @{ Expression = { -not $_.PreSelect } }, @{ Expression = { $_.Tier -ne 'Required' } })
+    $choices = [ordered]@{}
+    foreach ($row in $ordered) {
+        $label = "$($row.Name) - $($row.Description)"
+        if ($row.Tier -eq 'Required') { $label += " (required)" }
+        if ($row.Mechanism -eq 'remote-script') { $label += " (runs a script downloaded from $($row.ScriptUrl))" }
+        $choices[$label] = $row.Key
+    }
+
+    $selected = Read-SpectreMultiSelection `
+        -Title "Prerequisites" `
+        -Choices ([string[]]$choices.Keys) `
+        -AllowEmpty
+
+    $keys = @()
+    foreach ($label in $choices.Keys) {
+        if ($selected -contains $label) { $keys += $choices[$label] }
+    }
+
+    if ($keys.Count -eq 0) {
+        Write-SpectreHost "[yellow]Nothing selected; skipping prerequisite installation.[/]"
+        $Config.Prerequisites.Install = $false
+        Write-Host ""
+        return $Config
+    }
+
+    # --- Font sub-prompt (multi-select: several fonts in one go) -------------
+    $fonts = @()
+    if ($keys -contains 'nerd-font') {
+        Write-Host ""
+        Write-SpectreHost "[cyan]Nerd Fonts to install:[/]"
+        Write-SpectreHost "[dim]Any Nerd Font provides the glyphs; pick as many as you want.[/]"
+        $fonts = @(Read-SpectreMultiSelection `
+            -Title "Nerd Fonts" `
+            -Choices ([string[]]$script:AvailableNerdFonts) `
+            -AllowEmpty)
+        if ($fonts.Count -eq 0) {
+            Write-SpectreHost "[dim]No fonts selected; skipping the font install.[/]"
+            $keys = @($keys | Where-Object { $_ -ne 'nerd-font' })
+        }
+    }
+
+    $Config.Prerequisites.Selected = $keys
+    $Config.Prerequisites.Fonts = $fonts
+
+    if ($keys.Count -eq 0) {
+        $Config.Prerequisites.Install = $false
+        Write-Host ""
+        return $Config
+    }
+
+    # --- Install now ---------------------------------------------------------
+    Write-Host ""
+    Write-SpectreHost "[dim]Installer output is captured to keep this screen readable; each package can take a minute or two.[/]"
+    Write-Host ""
+
+    $merged = @{
+        Installed = @(); AlreadyInstalled = @(); Failed = @(); Skipped = @(); NeedsNewShell = @()
+    }
+
+    # Per-key loop so progress can be printed. Install-Prerequisites deliberately emits
+    # no output of its own (same contract as Install-RequiredModules), so the caller owns
+    # the UI.
+    $index = 0
+    foreach ($key in $keys) {
+        $index++
+        $row = $catalog | Where-Object { $_.Key -eq $key } | Select-Object -First 1
+        Write-SpectreHost "[blue][[$index/$($keys.Count)]][/] Installing $($row.Name)..."
+        # Showing the real command is what stops a slow install looking like a hang.
+        Write-SpectreHost "  [dim]$($row.InstallHint)[/]"
+
+        $result = Install-Prerequisites -Keys @($key) -Catalog $catalog -Fonts $fonts
+
+        foreach ($name in $result.Installed) {
+            $merged.Installed += $name
+            Write-SpectreHost "  [green]Installed[/]"
+        }
+        foreach ($name in $result.AlreadyInstalled) {
+            $merged.AlreadyInstalled += $name
+            Write-SpectreHost "  [dim]Already installed[/]"
+        }
+        foreach ($item in $result.Failed) {
+            $merged.Failed += $item
+            Write-SpectreHost "  [yellow]Failed: $($item.Error -replace '\r?\n', ' ')[/]"
+        }
+        foreach ($item in $result.Skipped) {
+            $merged.Skipped += $item
+            Write-SpectreHost "  [yellow]Skipped: $($item.Reason)[/]"
+        }
+        $merged.NeedsNewShell += $result.NeedsNewShell
+    }
+
+    $Config.Prerequisites.Installed = $merged.Installed
+    $Config.Prerequisites.AlreadyInstalled = $merged.AlreadyInstalled
+    $Config.Prerequisites.Failed = $merged.Failed
+    $Config.Prerequisites.Skipped = $merged.Skipped
+    $Config.Prerequisites.NeedsNewShell = $merged.NeedsNewShell
+
+    # Refresh PATH and re-detect so the later steps see reality, not the pre-install state.
+    Update-SessionPath | Out-Null
+    if ($Config._Detection) {
+        $Config._Detection.Prereqs = Get-PrerequisiteState -Catalog $catalog -Fast
+    }
+
+    # --- Closing summary and caveats ----------------------------------------
+    Write-Host ""
+    if ($merged.Installed.Count -gt 0) {
+        Write-SpectreHost "[green]Installed: $($merged.Installed -join ', ')[/]"
+    }
+    if ($merged.Failed.Count -gt 0) {
+        Write-SpectreHost "[yellow]$($merged.Failed.Count) prerequisite(s) failed; the wizard will continue.[/]"
+    }
+    if ($merged.NeedsNewShell.Count -gt 0) {
+        Write-SpectreHost "[yellow]Open a new terminal to pick up: $($merged.NeedsNewShell -join ', ')[/]"
+    }
+    if ($fonts.Count -gt 0) {
+        Write-SpectreHost "[yellow]Fonts are installed but this terminal will not use one until you restart it[/]"
+        Write-SpectreHost "[yellow]and select the font in your terminal profile.[/]"
+    }
+    Write-Host ""
+
+    return $Config
 }
 
 #endregion
@@ -293,7 +543,7 @@ function Show-RepoLocationsStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 2 -StepTitle "Repository Locations" -TotalSteps 10
+    Show-StepHeader -StepNumber 3 -StepTitle "Repository Locations" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Where do you store your code repositories?"
     Write-SpectreHost "[dim]These paths will be used for Git profile directory matching.[/]"
@@ -541,7 +791,7 @@ function Show-GitConfigStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 3 -StepTitle "Git Configuration" -TotalSteps 10
+    Show-StepHeader -StepNumber 4 -StepTitle "Git Configuration" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Configure your Git identity for commits."
     Write-SpectreHost "[dim]This sets your default name and email for all repositories.[/]"
@@ -734,7 +984,7 @@ function Show-GitEditorStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 4 -StepTitle "Git Editor" -TotalSteps 10
+    Show-StepHeader -StepNumber 5 -StepTitle "Git Editor" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Select the editor Git will use for commit messages and interactive operations."
     Write-SpectreHost "[dim]This is used when you run 'git commit' without -m, or during rebases.[/]"
@@ -872,7 +1122,7 @@ function Show-PowerShellModulesStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 5 -StepTitle "PowerShell Modules" -TotalSteps 10
+    Show-StepHeader -StepNumber 6 -StepTitle "PowerShell Modules" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Select PowerShell modules to enhance your terminal experience."
     Write-SpectreHost "[dim]These modules add features like Git status, directory jumping, and icons.[/]"
@@ -1027,7 +1277,7 @@ function Show-OhMyPoshStep {
         [string]$DevkitRoot = ""
     )
 
-    Show-StepHeader -StepNumber 6 -StepTitle "Oh-My-Posh Theme" -TotalSteps 10
+    Show-StepHeader -StepNumber 7 -StepTitle "Oh-My-Posh Theme" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Select a theme for your terminal prompt."
     Write-SpectreHost "[dim]Oh-My-Posh provides beautiful, informative prompts with Git status and more.[/]"
@@ -1072,7 +1322,7 @@ function Show-NvimConfigStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 7 -StepTitle "Neovim Configuration" -TotalSteps 10
+    Show-StepHeader -StepNumber 8 -StepTitle "Neovim Configuration" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Install the bundled Neovim configuration (lazy.nvim + neo-tree + easy-dotnet)."
     Write-SpectreHost "[dim]Installs to `$env:LOCALAPPDATA\nvim\ - Neovim's standard Windows location.[/]"
@@ -1161,7 +1411,7 @@ function Show-ClaudeCodeStep {
         [string]$DevkitRoot = ""
     )
 
-    Show-StepHeader -StepNumber 8 -StepTitle "Claude Code, Statusline & Herdr" -TotalSteps 10
+    Show-StepHeader -StepNumber 9 -StepTitle "Claude Code, Statusline & Herdr" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Install Claude Code assets (agents, skills, commands, CLAUDE.md) into `$env:USERPROFILE\.claude"
     Write-SpectreHost "[dim]the herdr terminal-multiplexer configuration (settings.json hook + %APPDATA%\herdr\config.toml),[/]"
@@ -1605,7 +1855,7 @@ function Show-InstallationStep {
         [string]$DevkitRoot
     )
 
-    Show-StepHeader -StepNumber 10 -StepTitle "Installing" -TotalSteps 10
+    Show-StepHeader -StepNumber 11 -StepTitle "Installing" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Applying your configuration..."
     Write-Host ""
@@ -1679,6 +1929,22 @@ function Show-ConfigurationSummary {
         [PSCustomObject]@{ Setting = "Install devkit nvim config"; Value = $nvimInstall }
     )
     $nvimData | Format-SpectreTable -Border Rounded -Color Blue | Out-Host
+
+    # Prerequisites - past tense: these were applied in step 2, before this screen.
+    if ($Config.Prerequisites -and $Config.Prerequisites.Install) {
+        $p = $Config.Prerequisites
+        $none = "(none)"
+        $prereqData = @(
+            [PSCustomObject]@{ Setting = "Installed";       Value = $(if (@($p.Installed).Count) { @($p.Installed) -join ', ' } else { $none }) }
+            [PSCustomObject]@{ Setting = "Already present"; Value = $(if (@($p.AlreadyInstalled).Count) { @($p.AlreadyInstalled) -join ', ' } else { $none }) }
+            [PSCustomObject]@{ Setting = "Failed";          Value = $(if (@($p.Failed).Count) { (@($p.Failed) | ForEach-Object { $_.Name }) -join ', ' } else { $none }) }
+            [PSCustomObject]@{ Setting = "Skipped";         Value = $(if (@($p.Skipped).Count) { (@($p.Skipped) | ForEach-Object { "$($_.Name) ($($_.Reason))" }) -join ', ' } else { $none }) }
+        )
+        Write-Host ""
+        Write-SpectreHost "[blue]Prerequisites (installed earlier in this run):[/]"
+        $prereqData | Format-SpectreTable -Border Rounded -Color Blue | Out-Host
+        Write-SpectreHost "[dim]These were applied in step 2 and are not affected by the choice below.[/]"
+    }
 
     # Claude Code, Statusline & Herdr
     Write-Host ""
@@ -1773,45 +2039,51 @@ function Start-Wizard {
         $script:WizardState.Config = $ExistingConfig
     }
 
-    # Step 1: Welcome
+    # Welcome + mode selection (no step header of their own)
     Show-WelcomeScreen -Version $Version
 
-    # Step 2: Mode Selection
     $script:WizardState.Mode = Get-InstallationMode -ExistingConfigDetected $existingConfigDetected
     Write-SpectreHost "[green]Selected mode: $($script:WizardState.Mode)[/]"
     Write-Host ""
 
-    # Step 2: Repository Locations
+    # Step 2: Prerequisites. Runs FIRST among the content steps and installs
+    # immediately, so the Git-editor and Oh-My-Posh steps below can see new tools.
+    $script:WizardState.Config = Show-PrerequisitesStep -Config $script:WizardState.Config
+
+    # Step 3: Repository Locations
     $script:WizardState.Config = Show-RepoLocationsStep -Config $script:WizardState.Config
 
-    # Step 3: Git Configuration
+    # Step 4: Git Configuration
     $script:WizardState.Config = Show-GitConfigStep -Config $script:WizardState.Config
 
-    # Step 4: Git Editor
+    # Step 5: Git Editor
     $script:WizardState.Config = Show-GitEditorStep -Config $script:WizardState.Config
 
-    # Step 5: PowerShell Modules
+    # Step 6: PowerShell Modules
     $script:WizardState.Config = Show-PowerShellModulesStep -Config $script:WizardState.Config
 
-    # Step 6: Oh-My-Posh Theme
+    # Step 7: Oh-My-Posh Theme
     $script:WizardState.Config = Show-OhMyPoshStep -Config $script:WizardState.Config -DevkitRoot $DevkitRoot
 
-    # Step 7: Neovim Configuration
+    # Step 8: Neovim Configuration
     $script:WizardState.Config = Show-NvimConfigStep -Config $script:WizardState.Config
 
-    # Step 8: Claude Code & Herdr
+    # Step 9: Claude Code, Statusline & Herdr
     $script:WizardState.Config = Show-ClaudeCodeStep -Config $script:WizardState.Config -DevkitRoot $DevkitRoot
 
     # Confirmation step
-    Show-StepHeader -StepNumber 9 -StepTitle "Review Configuration" -TotalSteps 10
+    Show-StepHeader -StepNumber 10 -StepTitle "Review Configuration" -TotalSteps $script:WizardTotalSteps
 
     # Use fully collected config
+    # NOTE: this is a hand-copied projection, not the whole config. A new top-level
+    # config block will NOT reach Show-ConfigurationSummary unless it is added here.
     $displayConfig = @{
         RepoLocations = $script:WizardState.Config.RepoLocations
         Git = $script:WizardState.Config.Git
         PowerShell = $script:WizardState.Config.PowerShell
         Nvim = $script:WizardState.Config.Nvim
         Claude = $script:WizardState.Config.Claude
+        Prerequisites = $script:WizardState.Config.Prerequisites
     }
 
     Show-ConfigurationSummary -Config $displayConfig
@@ -1838,6 +2110,16 @@ function Start-Wizard {
     } else {
         $script:WizardState.Installed = $false
         $script:WizardState.InstallSuccess = $false
+
+        # Step 2 installs immediately, so cancelling here does not undo it. Say so
+        # rather than letting "Installation was cancelled" imply nothing happened.
+        $prereqs = $script:WizardState.Config.Prerequisites
+        if ($prereqs -and @($prereqs.Installed).Count -gt 0) {
+            Write-Host ""
+            Write-SpectreHost "[yellow]Note: $(@($prereqs.Installed).Count) prerequisite(s) were installed earlier in this run and remain installed.[/]"
+            Write-SpectreHost "[dim]Nothing else was changed. Open a new terminal to pick up PATH changes.[/]"
+        }
+
         Show-CompletionMessage
     }
 

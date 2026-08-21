@@ -260,30 +260,13 @@ function Test-NeovimAvailable {
         Hashtable with Found (bool), Version (string or $null), Path (string or $null)
     #>
 
-    $result = @{
-        Found = $false
-        Version = $null
-        Path = $null
-    }
-
-    $cmd = Get-Command nvim -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        return $result
-    }
-
-    $result.Found = $true
-    $result.Path = $cmd.Source
-
-    try {
-        $versionOutput = & nvim --version 2>$null | Select-Object -First 1
-        if ($versionOutput -match 'NVIM\s+v?([\d\.]+)') {
-            $result.Version = $Matches[1]
-        }
-    } catch {
-        # Version probe failed; leave Version as $null but keep Found = true
-    }
-
-    return $result
+    # Thin wrapper over Test-CommandAvailable. Kept as a named function because the
+    # wizard and test-validators.ps1 call it by name. The FallbackPaths entry also lets
+    # a just-installed Neovim resolve before the shell's PATH catches up.
+    return Test-CommandAvailable -Name 'nvim' `
+        -VersionArgs @('--version') `
+        -VersionPattern 'NVIM\s+v?([\d\.]+)' `
+        -FallbackPaths @('C:\Program Files\Neovim\bin\nvim.exe')
 }
 
 function Test-PwshAvailable {
@@ -358,30 +341,442 @@ function Test-ClaudeCodeAvailable {
         Hashtable with Found (bool), Version (string or $null), Path (string or $null)
     #>
 
+    # Thin wrapper over Test-CommandAvailable. No version regex: the CLI prints a bare
+    # version line, so the whole first line is taken (unchanged behaviour).
+    return Test-CommandAvailable -Name 'claude' `
+        -VersionArgs @('--version') `
+        -FallbackPaths @('%USERPROFILE%\.local\bin\claude.exe')
+}
+
+#endregion
+
+
+#region Prerequisite Catalogue
+
+function Test-CommandAvailable {
+    <#
+    .SYNOPSIS
+        Generic "is this tool present" probe with a well-known-path fallback
+    .DESCRIPTION
+        Get-Command first, then each FallbackPaths entry. The fallback matters because
+        winget does NOT refresh the calling process's PATH: a tool installed seconds ago
+        is invisible to Get-Command until a new shell, but its file is already on disk.
+        Without the fallback the wizard would offer to re-install what it just installed.
+
+        Environment variables in FallbackPaths are expanded at call time, not baked in,
+        so the test sandbox's redirected USERPROFILE/LOCALAPPDATA are honoured.
+    .PARAMETER Name
+        Command name to look for (e.g. "nvim")
+    .PARAMETER VersionArgs
+        Arguments used to probe the version
+    .PARAMETER VersionPattern
+        Regex with one capture group. When empty, the first non-empty output line is used.
+    .PARAMETER FallbackPaths
+        Well-known full paths to check when the command is not on PATH
+    .OUTPUTS
+        Hashtable with Found, Version, Path, Source ('PATH' | 'fallback-path' | $null)
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name,
+
+        [string[]]$VersionArgs = @('--version'),
+
+        [string]$VersionPattern = '',
+
+        [string[]]$FallbackPaths = @()
+    )
+
     $result = @{
         Found = $false
         Version = $null
         Path = $null
+        Source = $null
     }
 
-    $cmd = Get-Command claude -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        return $result
+    $exe = $null
+    $cmd = Get-Command $Name -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $exe = $cmd.Source
+        $result.Source = 'PATH'
+    } else {
+        foreach ($candidate in $FallbackPaths) {
+            if (-not $candidate) { continue }
+            $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
+            if (Test-Path $expanded) {
+                $exe = $expanded
+                $result.Source = 'fallback-path'
+                break
+            }
+        }
     }
+
+    if (-not $exe) { return $result }
 
     $result.Found = $true
-    $result.Path = $cmd.Source
+    $result.Path = $exe
+
+    # No version args means "presence only". Running the binary bare is NOT a safe
+    # fallback: glow, nvim and oh-my-posh all launch an interactive UI with no
+    # arguments and would hang the caller forever.
+    if (-not $VersionArgs -or $VersionArgs.Count -eq 0) { return $result }
 
     try {
-        $versionOutput = & claude --version 2>$null | Select-Object -First 1
-        if ($versionOutput) {
-            $result.Version = "$versionOutput".Trim()
+        $output = & $exe @VersionArgs 2>$null | Where-Object { $_ } | Select-Object -First 1
+        if ($output) {
+            if ($VersionPattern) {
+                if ("$output" -match $VersionPattern) { $result.Version = $Matches[1] }
+            } else {
+                $result.Version = "$output".Trim()
+            }
         }
     } catch {
         # Version probe failed; leave Version as $null but keep Found = true
     }
 
     return $result
+}
+
+function Test-WingetAvailable {
+    <#
+    .SYNOPSIS
+        Detects the winget package manager (Windows App Installer)
+    .OUTPUTS
+        Hashtable with Found, Version, Path
+    #>
+    return Test-CommandAvailable -Name 'winget' `
+        -VersionArgs @('--version') `
+        -VersionPattern 'v?([\d\.]+)' `
+        -FallbackPaths @('%LOCALAPPDATA%\Microsoft\WindowsApps\winget.exe')
+}
+
+function Test-NerdFontInstalled {
+    <#
+    .SYNOPSIS
+        Detects whether any Nerd Font (or a specific family) is installed
+    .DESCRIPTION
+        ANY Nerd Font satisfies the devkit's requirement - the prompt, Terminal-Icons and
+        the Claude statusline need the glyph ranges, not one particular family. Pass
+        -Family only when a caller genuinely cares about a specific one.
+
+        Files are checked before the registry because a font file on disk is the more
+        reliable signal; stale registry entries for uninstalled fonts are common.
+
+        Naming varies a lot between families and oh-my-posh versions - "MesloLGS NF",
+        "CaskaydiaCove NFM", "FiraCode Nerd Font Propo" - so both the spelled-out
+        "Nerd Font" form and the bare NF/NFM/NFP suffixes must be matched. Dropping the
+        bare-suffix alternative silently misses every Caskaydia install.
+    .PARAMETER Family
+        Optional family prefix to require (e.g. "Meslo")
+    .OUTPUTS
+        Hashtable with Found, Confidence ('strong'|'weak'|'none'), Families, Source, Paths
+    #>
+    param(
+        [string]$Family = ''
+    )
+
+    $result = @{
+        Found = $false
+        Confidence = 'none'
+        Families = @()
+        Source = $null
+        Paths = @()
+    }
+
+    $nerdPattern = if ($Family) {
+        "$([regex]::Escape($Family)).*(NerdFont|Nerd\s*Font|\bNF[MP]?\b)"
+    } else {
+        '(NerdFont|Nerd\s*Font|\bNF[MP]?\b)'
+    }
+    # File names have no spaces: "CaskaydiaCoveNerdFont-Regular.ttf", "MesloLGS NF Regular.ttf"
+    $filePattern = if ($Family) {
+        "^$([regex]::Escape($Family)).*(NerdFont|NF[MP]?[-_ ])"
+    } else {
+        '(NerdFont|NerdFontMono|NerdFontPropo|NF[MP]?[-_ ])'
+    }
+
+    try {
+        # 1. Font files (strong signal). The per-user directory is where
+        #    `oh-my-posh font install` writes when not elevated.
+        $fontDirs = @(
+            (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts')
+            (Join-Path $env:WINDIR 'Fonts')
+        )
+        foreach ($dir in $fontDirs) {
+            if (-not $dir -or -not (Test-Path $dir)) { continue }
+            $hits = Get-ChildItem -Path $dir -Include '*.ttf', '*.otf' -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -match $filePattern }
+            if ($hits) {
+                $result.Found = $true
+                $result.Confidence = 'strong'
+                $result.Source = 'font-file'
+                $result.Paths += @($hits | Select-Object -First 5 -ExpandProperty FullName)
+                $result.Families += @($hits | ForEach-Object { $_.BaseName } | Select-Object -First 5)
+                break
+            }
+        }
+
+        # 2. Registry value NAMES (weaker - entries outlive uninstalls).
+        #    HKCU first: oh-my-posh installs per-user, so that is where these land.
+        if (-not $result.Found) {
+            foreach ($hive in @('HKCU:', 'HKLM:')) {
+                $key = "$hive\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+                if (-not (Test-Path $key)) { continue }
+                $props = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+                if (-not $props) { continue }
+                $matched = $props.PSObject.Properties |
+                    Where-Object { $_.Name -notmatch '^PS' -and $_.Name -match $nerdPattern }
+                if ($matched) {
+                    $result.Found = $true
+                    $result.Source = "registry:$hive"
+                    $result.Families += @($matched | Select-Object -First 5 -ExpandProperty Name)
+
+                    # A registry entry can outlive the font file, so confirm one of the
+                    # referenced files actually exists before calling this a strong hit.
+                    # Values are either a bare file name (resolved against the font dirs)
+                    # or a full path.
+                    $confirmed = $false
+                    foreach ($prop in $matched) {
+                        $value = "$($prop.Value)"
+                        if (-not $value) { continue }
+                        $candidates = @(
+                            $value
+                            (Join-Path $env:WINDIR "Fonts\$value")
+                            (Join-Path $env:LOCALAPPDATA "Microsoft\Windows\Fonts\$value")
+                        )
+                        foreach ($candidate in $candidates) {
+                            if (Test-Path $candidate -ErrorAction SilentlyContinue) {
+                                $result.Paths += $candidate
+                                $confirmed = $true
+                                break
+                            }
+                        }
+                        if ($confirmed) { break }
+                    }
+                    $result.Confidence = if ($confirmed) { 'strong' } else { 'weak' }
+                    break
+                }
+            }
+        }
+    } catch {
+        # Detection is best-effort; an unreadable hive must not break the wizard.
+    }
+
+    return $result
+}
+
+function Get-DevkitPrerequisites {
+    <#
+    .SYNOPSIS
+        THE catalogue of prerequisite tools the devkit can detect and install
+    .DESCRIPTION
+        Single source of truth, consumed by Show-PrerequisitesStep, Install-Prerequisites,
+        `devkit prereqs` and `devkit doctor`. Adding a tool is one row.
+
+        Mechanism:
+          winget         - installed with `winget install --id <WingetId>`
+          remote-script  - the vendor's own installer, downloaded and run in a child pwsh
+          omp-font       - `oh-my-posh font install <name> --headless`
+          psgallery      - Install-Module (reporting only here; install.ps1 owns the prompt)
+
+        InstallHint strings mirror README.md's prerequisite tables; FallbackPaths mirror
+        README.md's "A note on PATH" table. Keep all three in sync.
+
+        PreSelect controls ORDERING AND EMPHASIS, not a tick - Read-SpectreMultiSelection
+        cannot pre-select choices. Rows with PreSelect = $false (Node.js, Claude Code,
+        Herdr) sort last and are never part of any default install set; they must be
+        ticked in the wizard or named explicitly on the CLI.
+    .OUTPUTS
+        Array of hashtables
+    #>
+
+    return @(
+        @{
+            Key = 'pwsh'; Name = 'PowerShell 7'; Description = 'The wizard and generated profile require it'
+            Mechanism = 'winget'; WingetId = 'Microsoft.PowerShell'
+            Command = 'pwsh'; VersionArgs = @('--version'); VersionPattern = 'PowerShell ([\d\.]+)'
+            FallbackPaths = @('%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe')
+            # Detection order is deliberately inverted vs the generic helper - see Test-PwshAvailable.
+            DetectOverride = 'Test-PwshAvailable'
+            ModuleName = $null; Fonts = @(); DependsOn = @()
+            Tier = 'Required'; PreSelect = $true; HandledBy = 'prereqs'
+            InstallHint = 'winget install --id Microsoft.PowerShell -e'; HelpUrl = ''
+        }
+        @{
+            Key = 'git'; Name = 'Git'; Description = 'Git config generation and aliases'
+            Mechanism = 'winget'; WingetId = 'Git.Git'
+            Command = 'git'; VersionArgs = @('--version'); VersionPattern = 'git version (\d+\.\d+\.\d+)'
+            FallbackPaths = @('C:\Program Files\Git\cmd\git.exe')
+            DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
+            Tier = 'Required'; PreSelect = $true; HandledBy = 'prereqs'
+            InstallHint = 'winget install --id Git.Git -e'; HelpUrl = ''
+        }
+        @{
+            Key = 'oh-my-posh'; Name = 'Oh My Posh'; Description = 'The profile calls oh-my-posh by name to render the prompt'
+            Mechanism = 'winget'; WingetId = 'JanDeDobbeleer.OhMyPosh'
+            Command = 'oh-my-posh'; VersionArgs = @('--version'); VersionPattern = '([\d\.]+)'
+            FallbackPaths = @('%LOCALAPPDATA%\Programs\oh-my-posh\bin\oh-my-posh.exe')
+            DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
+            Tier = 'Required'; PreSelect = $true; HandledBy = 'prereqs'
+            InstallHint = 'winget install --id JanDeDobbeleer.OhMyPosh -e'; HelpUrl = ''
+        }
+        @{
+            Key = 'nerd-font'; Name = 'Nerd Font'; Description = 'Glyphs for the prompt, Terminal-Icons and the Claude statusline'
+            Mechanism = 'omp-font'; WingetId = $null
+            Command = $null; VersionArgs = @(); VersionPattern = ''
+            FallbackPaths = @()
+            DetectOverride = $null; ModuleName = $null
+            Fonts = @('meslo')          # default; the wizard offers a multi-select
+            DependsOn = @('oh-my-posh') # installed BY oh-my-posh, so it must exist first
+            Tier = 'Required'; PreSelect = $true; HandledBy = 'prereqs'
+            InstallHint = 'oh-my-posh font install meslo --headless'; HelpUrl = ''
+        }
+        @{
+            Key = 'neovim'; Name = 'Neovim'; Description = 'The bundled Neovim config, or Neovim as the Git editor'
+            Mechanism = 'winget'; WingetId = 'Neovim.Neovim'
+            Command = 'nvim'; VersionArgs = @('--version'); VersionPattern = 'NVIM\s+v?([\d\.]+)'
+            FallbackPaths = @('C:\Program Files\Neovim\bin\nvim.exe')
+            DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
+            Tier = 'Optional'; PreSelect = $true; HandledBy = 'prereqs'
+            InstallHint = 'winget install --id Neovim.Neovim -e'; HelpUrl = ''
+        }
+        @{
+            Key = 'glow'; Name = 'glow'; Description = 'Rendering markdown in the terminal'
+            Mechanism = 'winget'; WingetId = 'charmbracelet.glow'
+            Command = 'glow'; VersionArgs = @('--version'); VersionPattern = '([\d\.]+)'
+            FallbackPaths = @('%LOCALAPPDATA%\Microsoft\WinGet\Links\glow.exe')
+            DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
+            Tier = 'Optional'; PreSelect = $true; HandledBy = 'prereqs'
+            InstallHint = 'winget install --id charmbracelet.glow -e'; HelpUrl = ''
+        }
+        @{
+            Key = 'nodejs'; Name = 'Node.js LTS'; Description = 'General dev workflows (and the npm-based Claude Code install)'
+            Mechanism = 'winget'; WingetId = 'OpenJS.NodeJS.LTS'
+            Command = 'node'; VersionArgs = @('--version'); VersionPattern = 'v?([\d\.]+)'
+            FallbackPaths = @('C:\Program Files\nodejs\node.exe')
+            DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
+            Tier = 'Optional'; PreSelect = $false; HandledBy = 'prereqs'
+            InstallHint = 'winget install --id OpenJS.NodeJS.LTS -e'; HelpUrl = ''
+        }
+        @{
+            Key = 'claude-code'; Name = 'Claude Code CLI'; Description = 'Using the Claude agents/skills/commands installed into ~/.claude'
+            Mechanism = 'remote-script'; WingetId = $null
+            ScriptUrl = 'https://claude.ai/install.ps1'
+            Command = 'claude'; VersionArgs = @('--version'); VersionPattern = ''
+            FallbackPaths = @('%USERPROFILE%\.local\bin\claude.exe')
+            DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
+            # Never pre-selected: this downloads and runs a script from the internet.
+            Tier = 'Optional'; PreSelect = $false; HandledBy = 'prereqs'
+            InstallHint = 'irm https://claude.ai/install.ps1 | iex'; HelpUrl = 'https://claude.ai'
+        }
+        @{
+            Key = 'herdr'; Name = 'Herdr'; Description = 'The herdr terminal multiplexer configured by the devkit'
+            # Preview is the ONLY published channel (there is no Herdr.Herdr), and the
+            # devkit's own herdr config.toml pins channel = "preview", so this matches.
+            Mechanism = 'winget'; WingetId = 'Herdr.Herdr.Preview'
+            Command = 'herdr'; VersionArgs = @('--version'); VersionPattern = '([\d\.]+)'
+            FallbackPaths = @('%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe')
+            DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
+            Tier = 'Optional'; PreSelect = $false; HandledBy = 'prereqs'
+            InstallHint = 'winget install --id Herdr.Herdr.Preview -e'; HelpUrl = 'https://herdr.dev'
+        }
+        @{
+            Key = 'pwshspectreconsole'; Name = 'PwshSpectreConsole'; Description = 'The wizard UI itself'
+            Mechanism = 'psgallery'; WingetId = $null
+            Command = $null; VersionArgs = @(); VersionPattern = ''
+            FallbackPaths = @()
+            DetectOverride = $null; ModuleName = 'PwshSpectreConsole'; Fonts = @(); DependsOn = @()
+            Tier = 'Required'; PreSelect = $true
+            # install.ps1 prompts for this before lib/ is dot-sourced - the wizard UI
+            # cannot render without it, so it can never be a wizard step. Reporting only.
+            HandledBy = 'installer-bootstrap'
+            InstallHint = 'Install-Module -Name PwshSpectreConsole -Scope CurrentUser'; HelpUrl = ''
+        }
+    )
+}
+
+function Get-PrerequisiteState {
+    <#
+    .SYNOPSIS
+        Resolves the live installed/missing state of the prerequisite catalogue
+    .DESCRIPTION
+        One call site for the wizard step, `devkit prereqs check` and `devkit doctor`.
+        Dispatches on each row's Mechanism. Never throws.
+    .PARAMETER Catalog
+        Catalogue rows (defaults to Get-DevkitPrerequisites)
+    .PARAMETER Keys
+        Optional subset of Keys to resolve
+    .PARAMETER Fast
+        Skip version probes. Each probe spawns a process, which is measurable when this
+        runs at wizard startup from Get-ExistingConfiguration.
+    .OUTPUTS
+        Ordered hashtable: Key -> @{ Key; Name; Tier; Found; Version; Path; Source;
+                                     Confidence; Mechanism; InstallHint }
+    #>
+    param(
+        [array]$Catalog = @(),
+        [string[]]$Keys = @(),
+        [switch]$Fast
+    )
+
+    if (-not $Catalog -or $Catalog.Count -eq 0) { $Catalog = Get-DevkitPrerequisites }
+
+    $state = [ordered]@{}
+
+    foreach ($row in $Catalog) {
+        if ($Keys.Count -gt 0 -and $Keys -notcontains $row.Key) { continue }
+
+        $entry = @{
+            Key = $row.Key; Name = $row.Name; Tier = $row.Tier
+            Mechanism = $row.Mechanism; InstallHint = $row.InstallHint
+            Found = $false; Version = $null; Path = $null; Source = $null
+            Confidence = $null
+        }
+
+        try {
+            switch ($row.Mechanism) {
+                'omp-font' {
+                    $font = Test-NerdFontInstalled
+                    $entry.Found = $font.Found
+                    $entry.Confidence = $font.Confidence
+                    $entry.Source = $font.Source
+                    if ($font.Families) { $entry.Version = ($font.Families | Select-Object -First 1) }
+                }
+                'psgallery' {
+                    $mod = Get-Module -ListAvailable -Name $row.ModuleName -ErrorAction SilentlyContinue |
+                        Select-Object -First 1
+                    if ($mod) {
+                        $entry.Found = $true
+                        $entry.Version = "$($mod.Version)"
+                        $entry.Path = $mod.ModuleBase
+                        $entry.Source = 'psgallery'
+                    }
+                }
+                default {
+                    # A row may pin a bespoke detector (pwsh), otherwise use the generic probe.
+                    if ($row.DetectOverride -and (Get-Command $row.DetectOverride -ErrorAction SilentlyContinue)) {
+                        $probe = & $row.DetectOverride
+                    } else {
+                        $versionArgs = if ($Fast) { @() } else { $row.VersionArgs }
+                        $probe = Test-CommandAvailable -Name $row.Command `
+                            -VersionArgs $versionArgs `
+                            -VersionPattern $row.VersionPattern `
+                            -FallbackPaths $row.FallbackPaths
+                    }
+                    $entry.Found = [bool]$probe.Found
+                    $entry.Version = $probe.Version
+                    $entry.Path = $probe.Path
+                    if ($probe.ContainsKey('Source')) { $entry.Source = $probe.Source }
+                }
+            }
+        } catch {
+            # Leave the row as not-found rather than breaking the whole report.
+        }
+
+        $state[$row.Key] = $entry
+    }
+
+    return $state
 }
 
 #endregion
@@ -429,6 +824,17 @@ function New-DevkitConfig {
             InstallStatusLine = $false
             StatusLineSize    = 'small'
             StatusLineMode    = 'Fresh'
+        }
+        Prerequisites = @{
+            Install          = $false   # parent gate; true only when the user opts in
+            Selected         = @()      # catalogue Keys the user ticked
+            Fonts            = @()      # Nerd Font names to install (multi-select)
+            Installed        = @()
+            AlreadyInstalled = @()
+            Failed           = @()      # @{ Name; Error } - mirrors Install-RequiredModules
+            Skipped          = @()      # @{ Name; Reason }
+            NeedsNewShell    = @()      # installed, but not resolvable in this process
+            WingetAvailable  = $false
         }
         InstallPath = ""
         BackupPath = ""
@@ -493,4 +899,7 @@ function Test-DevkitConfig {
 # - Test-DirectoryPath, Read-ValidatedPath
 # - Test-NonEmptyString, Read-ValidatedName
 # - Test-NeovimAvailable, Test-PwshAvailable, Test-ClaudeCodeAvailable
+# Prerequisites:
+# - Test-CommandAvailable, Test-WingetAvailable, Test-NerdFontInstalled
+# - Get-DevkitPrerequisites, Get-PrerequisiteState
 # - New-DevkitConfig, Test-DevkitConfig

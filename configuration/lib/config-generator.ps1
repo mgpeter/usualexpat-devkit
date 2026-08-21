@@ -812,6 +812,410 @@ function Install-RequiredModules {
 
 #endregion
 
+#region Prerequisite Installation
+
+# Native-command guard, shared by every seam below.
+#
+# install.ps1 sets $ErrorActionPreference = "Stop" at script scope and dot-sourced
+# functions inherit it. On PowerShell 7.4+ $PSNativeCommandUseErrorActionPreference
+# defaults to $true, so ANY non-zero exit from winget/oh-my-posh would become a
+# TERMINATING error - which Invoke-Installation's catch turns into Success = $false,
+# silently converting "warn and continue" into "abort the whole install". Redirecting
+# 2>&1 on a native command also produces ErrorRecords that terminate under Stop.
+#
+# Do not remove this. A tidy-up that drops it reintroduces hard failures on the
+# perfectly ordinary "package already installed" exit codes.
+function Invoke-NativeCapture {
+    <#
+    .SYNOPSIS
+        Runs a native command with output captured and native errors made non-terminating
+    .PARAMETER Executable
+        Full path or command name to run
+    .PARAMETER Arguments
+        Argument array
+    .OUTPUTS
+        Hashtable with Success, ExitCode, Output, Command. Never throws.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Executable,
+
+        [string[]]$Arguments = @()
+    )
+
+    $result = @{
+        Success = $false
+        ExitCode = -1
+        Output = ''
+        Command = "$Executable $($Arguments -join ' ')"
+    }
+
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    $hasNativePref = $null -ne (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue)
+    $prevNativePref = $null
+    if ($hasNativePref) {
+        $prevNativePref = $PSNativeCommandUseErrorActionPreference
+        $global:PSNativeCommandUseErrorActionPreference = $false
+    }
+
+    try {
+        # Capturing into a variable redirects the child's stdout handle, which makes
+        # winget drop its animated progress bar and emit plain text - so no cursor
+        # escapes reach the console and the Spectre UI is never corrupted.
+        $output = & $Executable @Arguments 2>&1 | Out-String
+        $result.ExitCode = $LASTEXITCODE
+        $result.Output = $output
+        $result.Success = ($LASTEXITCODE -eq 0)
+    } catch {
+        $result.Output = "$_"
+        $result.Success = $false
+    } finally {
+        $ErrorActionPreference = $prevEap
+        if ($hasNativePref) { $global:PSNativeCommandUseErrorActionPreference = $prevNativePref }
+    }
+
+    if ($env:DEVKIT_PREREQ_TRACE) {
+        Write-Host "[prereq-trace] $($result.Command) -> exit $($result.ExitCode)" -ForegroundColor DarkGray
+    }
+
+    return $result
+}
+
+function Invoke-WingetInstall {
+    <#
+    .SYNOPSIS
+        THE winget seam - the only place `winget install` is invoked
+    .DESCRIPTION
+        Install-Prerequisites calls this BY NAME so test-prereqs.ps1 can shadow it and
+        the suite never installs anything. Do not inline `& winget` into the caller.
+
+        --source winget pins the source so a corporate msstore mirror cannot hijack the
+        id; --disable-interactivity stops winget prompting inside the wizard.
+    .PARAMETER PackageId
+        Exact winget package id
+    .PARAMETER ExtraArgs
+        Additional winget arguments
+    .OUTPUTS
+        Hashtable with Success, ExitCode, Output, Command. Never throws.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$PackageId,
+
+        [string[]]$ExtraArgs = @()
+    )
+
+    $winget = Test-WingetAvailable
+    if (-not $winget.Found) {
+        return @{ Success = $false; ExitCode = -1; Output = 'winget is not available'; Command = "winget install --id $PackageId" }
+    }
+
+    $arguments = @(
+        'install', '--id', $PackageId, '-e',
+        '--source', 'winget',
+        '--accept-package-agreements',
+        '--accept-source-agreements',
+        '--disable-interactivity',
+        '--silent'
+    ) + $ExtraArgs
+
+    return Invoke-NativeCapture -Executable $winget.Path -Arguments $arguments
+}
+
+function Invoke-RemoteScriptInstall {
+    <#
+    .SYNOPSIS
+        THE remote-script seam - runs a vendor installer downloaded over HTTPS
+    .DESCRIPTION
+        Deliberately runs in a CHILD pwsh rather than the wizard's own runspace: the
+        downloaded script is free to call exit, which would otherwise kill the wizard
+        mid-run. Shadowed by test-prereqs.ps1, so it is called by name.
+
+        The URL is printed by the caller before this runs, so it is always visible what
+        remote code is about to execute.
+    .PARAMETER Url
+        HTTPS URL of the installer script
+    .PARAMETER Name
+        Friendly name, used only in messages
+    .OUTPUTS
+        Hashtable with Success, ExitCode, Output, Command. Never throws.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Url,
+
+        [string]$Name = ''
+    )
+
+    if ($Url -notmatch '^https://') {
+        return @{ Success = $false; ExitCode = -1; Output = "Refusing to run a non-HTTPS installer URL: $Url"; Command = $Url }
+    }
+
+    $pwsh = Test-PwshAvailable
+    if (-not $pwsh.Found) {
+        return @{ Success = $false; ExitCode = -1; Output = 'pwsh not found; cannot run the installer in a child process'; Command = $Url }
+    }
+
+    return Invoke-NativeCapture -Executable $pwsh.Path -Arguments @(
+        '-NoProfile', '-NonInteractive', '-Command', "irm '$Url' | iex"
+    )
+}
+
+function Invoke-OhMyPoshFontInstall {
+    <#
+    .SYNOPSIS
+        THE font seam - installs one Nerd Font via oh-my-posh
+    .DESCRIPTION
+        ALWAYS passes both a font name and --headless. The bare `oh-my-posh font install`
+        form opens an interactive TUI picker, which inside the wizard would hang it.
+
+        oh-my-posh is resolved through Test-CommandAvailable (not just Get-Command) so a
+        copy installed moments ago at its well-known path is used even when PATH is stale.
+    .PARAMETER FontName
+        Font to install (e.g. "meslo")
+    .OUTPUTS
+        Hashtable with Success, ExitCode, Output, Command. Never throws.
+    #>
+    param(
+        [string]$FontName = 'meslo'
+    )
+
+    $omp = Test-CommandAvailable -Name 'oh-my-posh' `
+        -VersionArgs @() `
+        -FallbackPaths @('%LOCALAPPDATA%\Programs\oh-my-posh\bin\oh-my-posh.exe')
+
+    if (-not $omp.Found) {
+        return @{ Success = $false; ExitCode = -1; Output = 'oh-my-posh not found'; Command = "oh-my-posh font install $FontName --headless" }
+    }
+
+    return Invoke-NativeCapture -Executable $omp.Path -Arguments @('font', 'install', $FontName, '--headless')
+}
+
+function Update-SessionPath {
+    <#
+    .SYNOPSIS
+        Refreshes $env:PATH in THIS process from the Machine and User registry values
+    .DESCRIPTION
+        winget does not refresh the calling process's PATH, so a tool installed seconds
+        ago is invisible to Get-Command until a new shell. This closes that gap for the
+        wizard's later steps (the Git-editor list and the Oh-My-Posh theme scan).
+
+        Registry entries come first, then any process-only entries a caller added by hand
+        this session, so nothing already in the session is lost. PATH only - deliberately
+        not a general environment refresh.
+
+        Limits worth knowing: this does nothing for FONTS (not a PATH concern at all), and
+        App Execution Alias shims under WindowsApps may still need a new shell. PowerShell
+        also caches some application lookups, so Get-Command right after a refresh can
+        still miss - which is why every detector also checks FallbackPaths directly.
+    .OUTPUTS
+        Hashtable with Added, Count, Before, After. Never throws.
+    #>
+
+    $result = @{ Added = @(); Count = 0; Before = $env:PATH; After = $env:PATH }
+
+    try {
+        $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+        $user = [Environment]::GetEnvironmentVariable('Path', 'User')
+        $current = @($env:PATH -split ';')
+
+        $merged = @($machine -split ';') + @($user -split ';') + $current
+
+        $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        $ordered = [System.Collections.Generic.List[string]]::new()
+        foreach ($entry in $merged) {
+            if (-not $entry) { continue }
+            $trimmed = "$entry".Trim()
+            if (-not $trimmed) { continue }
+            if ($seen.Add($trimmed.TrimEnd('\'))) { $ordered.Add($trimmed) | Out-Null }
+        }
+
+        $before = [System.Collections.Generic.HashSet[string]]::new([string[]]$current, [StringComparer]::OrdinalIgnoreCase)
+        $result.Added = @($ordered | Where-Object { -not $before.Contains($_) })
+        $result.Count = $result.Added.Count
+
+        $env:PATH = ($ordered -join ';')
+        $result.After = $env:PATH
+    } catch {
+        Write-Warning "Failed to refresh PATH from the registry: $_"
+    }
+
+    return $result
+}
+
+function Install-Prerequisites {
+    <#
+    .SYNOPSIS
+        Installs the selected prerequisite tools
+    .DESCRIPTION
+        Mirrors Install-RequiredModules: checks what is already present and skips it,
+        wraps every item so one failure cannot stop the rest, NEVER THROWS, and emits no
+        output of its own - the caller prints.
+
+        Success is decided by RE-DETECTION, not by exit codes. winget has a family of
+        non-zero-but-fine codes (already installed, no applicable upgrade), and the
+        reverse also happens (exit 0, but the binary only lands on PATH in a new shell).
+        Re-detecting after the seam returns handles both without hardcoding constants.
+    .PARAMETER Keys
+        Catalogue Keys to install
+    .PARAMETER Catalog
+        Catalogue rows (defaults to Get-DevkitPrerequisites)
+    .PARAMETER Fonts
+        Nerd Font names for the nerd-font row (defaults to that row's Fonts)
+    .PARAMETER DryRun
+        Resolve and report the exact commands without running anything
+    .PARAMETER NoPathRefresh
+        Skip the in-process PATH refresh after each install
+    .OUTPUTS
+        Hashtable with Installed, AlreadyInstalled, Failed, Skipped, NeedsNewShell,
+        PathRefreshed. Never throws.
+    #>
+    param(
+        [string[]]$Keys = @(),
+        [array]$Catalog = @(),
+        [string[]]$Fonts = @(),
+        [switch]$DryRun,
+        [switch]$NoPathRefresh
+    )
+
+    $results = @{
+        Installed = @()
+        AlreadyInstalled = @()
+        Failed = @()
+        Skipped = @()
+        NeedsNewShell = @()
+        PathRefreshed = $false
+    }
+
+    if (-not $Catalog -or $Catalog.Count -eq 0) { $Catalog = Get-DevkitPrerequisites }
+    if ($Keys.Count -eq 0) { return $results }
+
+    $wingetAvailable = (Test-WingetAvailable).Found
+
+    # Local helper: is this row satisfied right now?
+    $isPresent = {
+        param($Row)
+        $state = Get-PrerequisiteState -Catalog @($Row) -Keys @($Row.Key) -Fast
+        $entry = $state[$Row.Key]
+        if (-not $entry) { return $false }
+        # A registry-only font hit is deliberately NOT treated as satisfied: a false
+        # positive costs the user their glyphs, a false negative costs a redundant
+        # download.
+        if ($Row.Mechanism -eq 'omp-font') {
+            return ($entry.Found -and $entry.Confidence -eq 'strong')
+        }
+        return [bool]$entry.Found
+    }
+
+    foreach ($row in $Catalog) {
+        if ($Keys -notcontains $row.Key) { continue }
+
+        # 1. Dry run: report the command, touch nothing.
+        if ($DryRun) {
+            $results.Skipped += @{ Name = $row.Name; Reason = 'dry-run'; Command = $row.InstallHint }
+            continue
+        }
+
+        # 2. Already satisfied.
+        if (& $isPresent $row) {
+            $results.AlreadyInstalled += $row.Name
+            continue
+        }
+
+        # 3. Dependency guard - this is what stops the font install when oh-my-posh failed.
+        $unmet = @()
+        foreach ($dep in @($row.DependsOn)) {
+            $depRow = $Catalog | Where-Object { $_.Key -eq $dep } | Select-Object -First 1
+            if ($depRow -and -not (& $isPresent $depRow)) { $unmet += $dep }
+        }
+        if ($unmet.Count -gt 0) {
+            $results.Skipped += @{ Name = $row.Name; Reason = "requires $($unmet -join ', ')" }
+            continue
+        }
+
+        # 4. Mechanism gates.
+        if ($row.Mechanism -eq 'winget' -and -not $wingetAvailable) {
+            $results.Skipped += @{ Name = $row.Name; Reason = 'winget (App Installer) not available'; Command = $row.InstallHint }
+            continue
+        }
+        if ($row.HandledBy -eq 'installer-bootstrap') {
+            $results.Skipped += @{ Name = $row.Name; Reason = 'handled by the installer bootstrap'; Command = $row.InstallHint }
+            continue
+        }
+
+        # 5. Install via the matching seam.
+        #
+        # NOTE: `continue` inside a PowerShell switch continues the SWITCH, not this
+        # foreach. Branches that fully handle a row therefore set $handled and the
+        # post-switch verification is guarded on it - otherwise a handled row falls
+        # through and gets a second, bogus "exit unknown" failure appended.
+        $outcome = $null
+        $handled = $false
+        try {
+            switch ($row.Mechanism) {
+                'winget' {
+                    $outcome = Invoke-WingetInstall -PackageId $row.WingetId
+                }
+                'remote-script' {
+                    $outcome = Invoke-RemoteScriptInstall -Url $row.ScriptUrl -Name $row.Name
+                }
+                'omp-font' {
+                    # Each font gets its own call, so one bad name cannot lose the others.
+                    $fontList = if ($Fonts.Count -gt 0) { $Fonts } else { @($row.Fonts) }
+                    $fontFailures = @()
+                    $fontInstalled = @()
+                    foreach ($font in $fontList) {
+                        $fontResult = Invoke-OhMyPoshFontInstall -FontName $font
+                        if ($fontResult.Success) { $fontInstalled += $font }
+                        else { $fontFailures += "$font (exit $($fontResult.ExitCode))" }
+                    }
+                    foreach ($font in $fontInstalled) { $results.Installed += "$($row.Name): $font" }
+                    if ($fontFailures.Count -gt 0) {
+                        $results.Failed += @{ Name = $row.Name; Error = "font install failed: $($fontFailures -join ', ')" }
+                    }
+                    if (-not $NoPathRefresh) { Update-SessionPath | Out-Null; $results.PathRefreshed = $true }
+                    $handled = $true
+                }
+                default {
+                    $results.Skipped += @{ Name = $row.Name; Reason = "unsupported mechanism '$($row.Mechanism)'" }
+                    $handled = $true
+                }
+            }
+        } catch {
+            # Belt and braces - the seams already never throw.
+            $results.Failed += @{ Name = $row.Name; Error = "$_" }
+            continue
+        }
+
+        if ($handled) { continue }
+
+        # 6. Refresh PATH before re-detecting, so a just-installed tool can resolve.
+        if (-not $NoPathRefresh) {
+            Update-SessionPath | Out-Null
+            $results.PathRefreshed = $true
+        }
+
+        # 7. Detection decides, not the exit code.
+        if (& $isPresent $row) {
+            $results.Installed += $row.Name
+        } elseif ($outcome -and $outcome.ExitCode -eq 0) {
+            $results.Installed += $row.Name
+            $results.NeedsNewShell += $row.Name
+        } else {
+            $exitCode = if ($outcome) { $outcome.ExitCode } else { 'unknown' }
+            $output = if ($outcome) { "$($outcome.Output)".Trim() } else { '' }
+            if ($output.Length -gt 400) { $output = $output.Substring(0, 400) + '...' }
+            $results.Failed += @{ Name = $row.Name; Error = "exit $exitCode`n$output" }
+        }
+    }
+
+    return $results
+}
+
+#endregion
+
 #region Full Installation
 
 function Invoke-ConfigGeneration {
@@ -1655,5 +2059,8 @@ function Remove-ClaudeStatusLine {
 # - New-ProfileSnippet, Update-PowerShellProfile
 # Modules:
 # - Install-RequiredModules
+# Prerequisites:
+# - Invoke-NativeCapture, Invoke-WingetInstall, Invoke-RemoteScriptInstall
+# - Invoke-OhMyPoshFontInstall, Update-SessionPath, Install-Prerequisites
 # Full Installation:
 # - Invoke-ConfigGeneration

@@ -100,7 +100,7 @@ $script:DevkitRegistry = @{
     )
 
     Commands = @(
-        @{ Name = 'devkit help [topic]';            Description = 'This help, or one section (modules|aliases|keymaps|functions|git|nvim|claude|herdr|statusline|env|commands)' }
+        @{ Name = 'devkit help [topic]';            Description = 'This help, or one section (modules|aliases|keymaps|functions|git|nvim|claude|herdr|statusline|prereqs|env|commands)' }
         @{ Name = 'devkit version';                 Description = 'Devkit version + install paths' }
         @{ Name = 'devkit doctor';                  Description = 'Run health checks' }
         @{ Name = 'devkit find <keyword>';          Description = 'Search inventory for matching rows' }
@@ -113,6 +113,8 @@ $script:DevkitRegistry = @{
         @{ Name = 'devkit statusline refresh';      Description = 'Re-download the renderer, keeping the current size' }
         @{ Name = 'devkit statusline size <mode>';  Description = 'Change size (xsmall|small|medium|large|xlarge) without downloading' }
         @{ Name = 'devkit statusline remove';       Description = 'Unwire the statusline (--keep-script leaves the renderer)' }
+        @{ Name = 'devkit prereqs check';            Description = 'Report which prerequisite tools and Nerd Font are present' }
+        @{ Name = 'devkit prereqs install [name..]'; Description = 'Install missing prerequisites via winget (--all, --yes, --dry-run, --font)' }
         @{ Name = 'devkit backups list';            Description = 'List ~/.devkit/backups/' }
         @{ Name = 'devkit backups restore <name>';  Description = 'Restore a backup file or directory' }
         @{ Name = 'devkit fix terminal-icons';      Description = 'Purge corrupt Terminal-Icons CLIXML cache' }
@@ -270,6 +272,30 @@ function _Devkit-ClaudeHerdrPresence {
     }
 }
 
+function _Devkit-PrintPrerequisites {
+    _Devkit-WriteSection "PREREQUISITES"
+    $catalog = _Devkit-TryGetPrereqCatalog
+    if (-not $catalog) {
+        _Devkit-WriteDim "  (catalogue unavailable - set DEVKIT_REPO_ROOT to the devkit repo)"
+        return
+    }
+    foreach ($row in $catalog) {
+        $present = switch ($row.Mechanism) {
+            'omp-font'  {
+                $fontDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts' } else { $null }
+                [bool]($fontDir -and (Test-Path $fontDir) -and (Get-ChildItem $fontDir -Filter '*NerdFont*' -ErrorAction SilentlyContinue))
+            }
+            'psgallery' { [bool](Get-Module -ListAvailable -Name $row.ModuleName -ErrorAction SilentlyContinue) }
+            default     { [bool](Get-Command $row.Command -ErrorAction SilentlyContinue) }
+        }
+        $marker = if ($present) { [char]0x2713 } else { [char]0x2717 }
+        $color = if ($present) { 'Green' } else { 'DarkGray' }
+        Write-Host "  $marker " -ForegroundColor $color -NoNewline
+        _Devkit-WriteRow -Left "$($row.Name) [$($row.Tier)]" -Right $row.InstallHint -Pad 28
+    }
+    _Devkit-WriteDim "  install with: devkit prereqs install [name...]   (full check: devkit prereqs check)"
+}
+
 function _Devkit-PrintClaudeHerdr {
     _Devkit-WriteSection "CLAUDE / HERDR"
     foreach ($r in $script:DevkitRegistry.ClaudeHerdr) {
@@ -318,11 +344,12 @@ function Show-DevkitHelp {
         'claude'    { _Devkit-PrintClaudeHerdr }
         'herdr'     { _Devkit-PrintClaudeHerdr }
         'statusline' { _Devkit-PrintClaudeHerdr }
+        'prereqs'   { _Devkit-PrintPrerequisites }
         'env'       { _Devkit-PrintEnv }
         'commands'  { _Devkit-PrintCommands }
         default {
             Write-Warning "Unknown topic: $Topic"
-            Write-Host "  Topics: modules, aliases, keymaps, functions, git, nvim, claude, herdr, statusline, env, commands" -ForegroundColor DarkGray
+            Write-Host "  Topics: modules, aliases, keymaps, functions, git, nvim, claude, herdr, statusline, prereqs, env, commands" -ForegroundColor DarkGray
         }
     }
     Write-Host ""
@@ -463,22 +490,68 @@ function Invoke-DevkitDoctor {
         _Devkit-CheckResult WARN 'Oh-My-Posh theme not set' -Hint 'Run: devkit update'
     }
 
-    # 7. Required tools on PATH (claude/herdr/glow are optional external apps the
-    # devkit only configures or leverages - nothing here is installed by the devkit)
-    foreach ($tool in @('git', 'nvim', 'oh-my-posh', 'claude', 'herdr', 'glow')) {
-        $cmd = Get-Command $tool -ErrorAction SilentlyContinue
-        if ($cmd) {
-            _Devkit-CheckResult OK "$tool on PATH" -Detail $cmd.Source
-        } else {
-            $hint = switch ($tool) {
-                'nvim'       { 'winget install Neovim.Neovim' }
-                'oh-my-posh' { 'winget install JanDeDobbeleer.OhMyPosh' }
-                'git'        { 'winget install Git.Git' }
-                'claude'     { 'Optional: install Claude Code to use the bundled agents/commands' }
-                'herdr'      { 'Optional: external multiplexer; the devkit only writes its config' }
-                'glow'       { 'Optional: winget install charmbracelet.glow (terminal markdown renderer)' }
+    # 7. External tools the devkit depends on but does not vendor. The wizard's
+    # prerequisites step and `devkit prereqs install` can install most of them via
+    # winget; lib/validators.ps1's catalogue is the source of truth for ids and hints.
+    # Falls back to an inline list when the repo is unavailable, so doctor keeps working.
+    # Dot-source here, not inside a helper: the font check below calls
+    # Test-NerdFontInstalled, and a helper's dot-source would not reach this scope.
+    $prereqCatalog = $null
+    $validatorsPath = _Devkit-ResolveValidators
+    if ($validatorsPath) {
+        try {
+            . $validatorsPath
+            $prereqCatalog = Get-DevkitPrerequisites
+        } catch {
+            $prereqCatalog = $null
+        }
+    }
+    if ($prereqCatalog) {
+        foreach ($row in ($prereqCatalog | Where-Object { $_.Command })) {
+            $cmd = Get-Command $row.Command -ErrorAction SilentlyContinue
+            if ($cmd) {
+                _Devkit-CheckResult OK "$($row.Command) on PATH" -Detail $cmd.Source
+            } else {
+                _Devkit-CheckResult WARN "$($row.Command) not on PATH" -Hint "$($row.InstallHint) (or: devkit prereqs install $($row.Key))"
             }
-            _Devkit-CheckResult WARN "$tool not on PATH" -Hint $hint
+        }
+
+        # 7a. winget itself - without it most of `devkit prereqs install` is inert.
+        if (Get-Command winget -ErrorAction SilentlyContinue) {
+            _Devkit-CheckResult OK "winget available"
+        } else {
+            _Devkit-CheckResult WARN "winget not available" -Hint 'Install "App Installer" from the Microsoft Store'
+        }
+
+        # 7b. A Nerd Font. The profile, Terminal-Icons and the statusline all assume one.
+        $fontState = if (Get-Command Test-NerdFontInstalled -ErrorAction SilentlyContinue) {
+            Test-NerdFontInstalled
+        } else {
+            @{ Found = $false; Confidence = 'none'; Families = @() }
+        }
+        if ($fontState.Found -and $fontState.Confidence -eq 'strong') {
+            _Devkit-CheckResult OK "Nerd Font installed" -Detail (@($fontState.Families) | Select-Object -First 1)
+        } elseif ($fontState.Found) {
+            _Devkit-CheckResult WARN "Nerd Font possibly installed (registry only)" -Hint 'devkit prereqs install nerd-font'
+        } else {
+            _Devkit-CheckResult WARN "No Nerd Font detected" -Hint 'devkit prereqs install nerd-font'
+        }
+    } else {
+        foreach ($tool in @('git', 'nvim', 'oh-my-posh', 'claude', 'herdr', 'glow')) {
+            $cmd = Get-Command $tool -ErrorAction SilentlyContinue
+            if ($cmd) {
+                _Devkit-CheckResult OK "$tool on PATH" -Detail $cmd.Source
+            } else {
+                $hint = switch ($tool) {
+                    'nvim'       { 'winget install Neovim.Neovim' }
+                    'oh-my-posh' { 'winget install JanDeDobbeleer.OhMyPosh' }
+                    'git'        { 'winget install Git.Git' }
+                    'claude'     { 'Optional: install Claude Code to use the bundled agents/commands' }
+                    'herdr'      { 'Optional: external multiplexer; the devkit only writes its config' }
+                    'glow'       { 'Optional: winget install charmbracelet.glow (terminal markdown renderer)' }
+                }
+                _Devkit-CheckResult WARN "$tool not on PATH" -Hint $hint
+            }
         }
     }
 
@@ -971,6 +1044,187 @@ function Invoke-DevkitStatusline {
 
 #endregion
 
+
+#region Subcommand: prereqs
+
+function _Devkit-ResolveValidators {
+    # Returns the path to lib/validators.ps1, or $null when the repo is unavailable.
+    #
+    # Callers that need the DETECTION FUNCTIONS (not just catalogue data) must
+    # dot-source this path THEMSELVES: dot-sourcing inside a function puts the
+    # functions in that function's scope, where the caller cannot see them.
+    #
+    # NEVER call this at file scope. devkit.ps1 is dot-sourced on every shell start and
+    # is deliberately dependency-free; this reaches into lib/ and must stay confined to
+    # doctor / prereqs / find, which the user invokes explicitly.
+    if (-not $env:DEVKIT_REPO_ROOT) { return $null }
+    $validators = Join-Path $env:DEVKIT_REPO_ROOT 'configuration\lib\validators.ps1'
+    if (-not (Test-Path $validators)) { return $null }
+    return $validators
+}
+
+function _Devkit-TryGetPrereqCatalog {
+    # Catalogue DATA only. Safe to call from anywhere that just needs the rows
+    # (tab completion, help); use _Devkit-ResolveValidators when you need the
+    # Test-* functions as well.
+    $validators = _Devkit-ResolveValidators
+    if (-not $validators) { return $null }
+    try {
+        . $validators
+        return Get-DevkitPrerequisites
+    } catch {
+        return $null
+    }
+}
+
+function Invoke-DevkitPrereqs {
+    <#
+        Installs or reports the external tools the devkit depends on. Kept separate from
+        `devkit claude refresh` and friends because this one reaches out to winget and
+        the network, and those are deliberately offline/repo-only.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string]$Action,
+
+        [Parameter(ValueFromRemainingArguments)]
+        [string[]]$Rest
+    )
+
+    if (-not $Action) { $Action = 'check' }
+
+    $libPaths = _Devkit-ResolveGenerator
+    if (-not $libPaths) { return }
+    foreach ($lib in $libPaths) { . $lib }
+
+    $catalog = Get-DevkitPrerequisites
+    $state = Get-PrerequisiteState -Catalog $catalog
+
+    $rest = @($Rest)
+    $all = $rest -contains '--all'
+    $yes = $rest -contains '--yes' -or $rest -contains '-y'
+    $dryRun = $rest -contains '--dry-run'
+
+    # --font <name>, repeatable
+    $fonts = @()
+    for ($i = 0; $i -lt $rest.Count; $i++) {
+        if ($rest[$i] -eq '--font' -and ($i + 1) -lt $rest.Count) { $fonts += $rest[$i + 1] }
+    }
+
+    # Positional keys are anything that is not a flag or a flag value
+    $flagValues = @($fonts)
+    $keys = @($rest | Where-Object {
+        $_ -notmatch '^-' -and $flagValues -notcontains $_
+    })
+
+    switch ($Action.ToLower()) {
+        'check' {
+            _Devkit-WriteSection "PREREQUISITES"
+            foreach ($row in $catalog) {
+                $entry = $state[$row.Key]
+                if ($entry.Found) {
+                    $detail = if ($entry.Version) { $entry.Version } elseif ($entry.Path) { $entry.Path } else { '' }
+                    if ($row.Mechanism -eq 'omp-font' -and $entry.Confidence -ne 'strong') {
+                        _Devkit-CheckResult WARN "$($row.Name) possibly installed" -Detail $detail -Hint "$($row.InstallHint) (or: devkit prereqs install $($row.Key))"
+                    } else {
+                        _Devkit-CheckResult OK $row.Name -Detail $detail
+                    }
+                } else {
+                    _Devkit-CheckResult WARN "$($row.Name) not found" -Hint "$($row.InstallHint) (or: devkit prereqs install $($row.Key))"
+                }
+            }
+            $winget = Test-WingetAvailable
+            if ($winget.Found) {
+                _Devkit-CheckResult OK "winget available" -Detail $winget.Version
+            } else {
+                _Devkit-CheckResult WARN "winget not available" -Hint 'Install "App Installer" from the Microsoft Store'
+            }
+            Write-Host ""
+        }
+
+        'install' {
+            $validKeys = @($catalog | ForEach-Object { $_.Key })
+            foreach ($key in $keys) {
+                if ($validKeys -notcontains $key) {
+                    Write-Warning "Unknown prerequisite '$key'. Valid: $($validKeys -join ', ')"
+                    return
+                }
+            }
+
+            if ($keys.Count -eq 0) {
+                # Default set: missing, emphasised, and automatable. remote-script rows
+                # are never included by default - they must be named explicitly.
+                $keys = @($catalog | Where-Object {
+                    $_.HandledBy -ne 'installer-bootstrap' -and
+                    $_.Mechanism -in @('winget', 'omp-font') -and
+                    (-not $state[$_.Key].Found -or ($_.Mechanism -eq 'omp-font' -and $state[$_.Key].Confidence -ne 'strong')) -and
+                    ($all -or $_.PreSelect)
+                } | ForEach-Object { $_.Key })
+            }
+
+            if ($keys.Count -eq 0) {
+                Write-Host "Nothing to install - all prerequisites are already present." -ForegroundColor Green
+                return
+            }
+
+            # Machine-scope winget installs want elevation; say so before starting.
+            $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')
+            if (-not $isAdmin) {
+                Write-Host "Not running elevated: winget may raise a UAC prompt per package." -ForegroundColor Yellow
+            }
+
+            Write-Host "The following will be installed:" -ForegroundColor Cyan
+            foreach ($key in $keys) {
+                $row = $catalog | Where-Object { $_.Key -eq $key } | Select-Object -First 1
+                _Devkit-WriteRow -Left $row.Name -Right $row.InstallHint -Pad 22
+            }
+            if ($fonts.Count -gt 0) { Write-Host "  fonts: $($fonts -join ', ')" -ForegroundColor DarkGray }
+            Write-Host ""
+
+            if (-not $yes -and -not $dryRun) {
+                $confirm = Read-Host "Proceed? (y/N)"
+                if ("$confirm".Trim() -notmatch '^(y|yes)$') {
+                    Write-Host "Cancelled." -ForegroundColor Yellow
+                    return
+                }
+            }
+
+            $results = Install-Prerequisites -Keys $keys -Catalog $catalog -Fonts $fonts -DryRun:$dryRun
+
+            Write-Host ""
+            if (@($results.Installed).Count -gt 0) {
+                Write-Host "Installed:        " -NoNewline; Write-Host ($results.Installed -join ', ') -ForegroundColor Green
+            }
+            if (@($results.AlreadyInstalled).Count -gt 0) {
+                Write-Host "Already present:  " -NoNewline; Write-Host ($results.AlreadyInstalled -join ', ') -ForegroundColor DarkGray
+            }
+            foreach ($item in @($results.Skipped)) {
+                Write-Host "Skipped:          " -NoNewline
+                Write-Host "$($item.Name) - $($item.Reason)" -ForegroundColor Yellow
+                if ($item.Command) { Write-Host "                  $($item.Command)" -ForegroundColor DarkGray }
+            }
+            foreach ($item in @($results.Failed)) {
+                Write-Host "Failed:           " -NoNewline
+                Write-Host "$($item.Name) - $($item.Error -replace '\r?\n', ' ')" -ForegroundColor Red
+            }
+            if (@($results.NeedsNewShell).Count -gt 0) {
+                Write-Host ""
+                Write-Host "Open a new terminal to pick up: $($results.NeedsNewShell -join ', ')" -ForegroundColor Yellow
+            }
+            if ($fonts.Count -gt 0 -and -not $dryRun) {
+                Write-Host "Fonts need a terminal restart and a font change in your terminal profile." -ForegroundColor Yellow
+            }
+            Write-Host ""
+        }
+
+        default {
+            Write-Warning "Usage: devkit prereqs check|install [name...] [--all] [--yes] [--dry-run] [--font <name>]"
+        }
+    }
+}
+
+#endregion
 #region Subcommand: backups
 
 function _Devkit-GetBackupRoot {
@@ -1196,6 +1450,7 @@ function devkit {
         'claude'  { Invoke-DevkitClaude @Rest }
         'herdr'   { Invoke-DevkitHerdr @Rest }
         'statusline' { Invoke-DevkitStatusline @Rest }
+        'prereqs' { Invoke-DevkitPrereqs @Rest }
         'backups' { Invoke-DevkitBackups @Rest }
         'fix'     { Invoke-DevkitFix @Rest }
         default {
@@ -1225,20 +1480,26 @@ Register-ArgumentCompleter -CommandName devkit -ScriptBlock {
     switch ($position) {
         1 {
             # Top-level commands
-            $candidates = @('help', 'version', 'doctor', 'find', 'update', 'nvim', 'claude', 'herdr', 'statusline', 'backups', 'fix')
+            $candidates = @('help', 'version', 'doctor', 'find', 'update', 'nvim', 'claude', 'herdr', 'statusline', 'prereqs', 'backups', 'fix')
         }
         2 {
             switch ($tokens[1].ToLower()) {
-                'help'    { $candidates = @('modules', 'aliases', 'keymaps', 'functions', 'git', 'nvim', 'claude', 'herdr', 'statusline', 'env', 'commands') }
+                'help'    { $candidates = @('modules', 'aliases', 'keymaps', 'functions', 'git', 'nvim', 'claude', 'herdr', 'statusline', 'prereqs', 'env', 'commands') }
                 'nvim'    { $candidates = @('refresh') }
                 'claude'  { $candidates = @('refresh', '--force') }
                 'herdr'   { $candidates = @('refresh') }
                 'statusline' { $candidates = @('status', 'install', 'refresh', 'size', 'remove', '--size', '--keep-script') }
+                'prereqs' { $candidates = @('check', 'install', '--all', '--yes', '--dry-run', '--font') }
                 'backups' { $candidates = @('list', 'restore') }
                 'fix'     { $candidates = @('terminal-icons') }
             }
         }
         3 {
+            if ($tokens[1].ToLower() -eq 'prereqs' -and $tokens[2].ToLower() -eq 'install') {
+                # Completion must never throw or print; a null catalogue just yields nothing.
+                $catalog = _Devkit-TryGetPrereqCatalog
+                if ($catalog) { $candidates = @($catalog | ForEach-Object { $_.Key }) }
+            }
             if ($tokens[1].ToLower() -eq 'statusline' -and $tokens[2].ToLower() -in @('size', '--size')) {
                 $candidates = @('xsmall', 'small', 'medium', 'large', 'xlarge')
             }

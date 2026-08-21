@@ -21,29 +21,35 @@ Everything is designed to be **easy to set up, powerful, and visually refined**.
 
 ### Prerequisites
 
-Install these **before** running the wizard. [winget](https://learn.microsoft.com/windows/package-manager/winget/) is preferred (it ships with Windows 11); direct installers are listed where the tool exposes one. **Open a new terminal after installing** so `PATH` updates take effect — each installer adds its own binary to `PATH` (see [A note on PATH](#a-note-on-path)).
+**The wizard can install most of these for you.** Step 2 detects what is missing and offers to install it with [winget](https://learn.microsoft.com/windows/package-manager/winget/) (or the tool's own installer); each tool is individually selectable and nothing is installed without an explicit tick. Install them yourself first if you prefer, or if `winget` is unavailable.
+
+The **Auto** column shows what the wizard can install: `yes` for winget and font rows, `opt-in` for Claude Code (which runs a script downloaded from the internet, so it is never pre-selected), and `n/a` for anything that is not a package.
 
 **Required**
 
-| Tool | Why | Install |
-| --- | --- | --- |
-| PowerShell 7+ | The wizard and generated profile require it (`#Requires -Version 7.0`) | `winget install --id Microsoft.PowerShell -e` |
-| Git | Git config generation + aliases | `winget install --id Git.Git -e` |
-| Oh My Posh | The profile calls `oh-my-posh` by name to render the prompt | `winget install --id JanDeDobbeleer.OhMyPosh -e` |
-| A Nerd Font | Glyphs/icons in the prompt, Terminal-Icons, and the Claude statusline bars | `oh-my-posh font install meslo` (after installing Oh My Posh), then set it as your terminal font |
+| Tool | Why | Install | Auto |
+| --- | --- | --- | --- |
+| PowerShell 7+ | The wizard and generated profile require it (`#Requires -Version 7.0`) | `winget install --id Microsoft.PowerShell -e` | yes |
+| Git | Git config generation + aliases | `winget install --id Git.Git -e` | yes |
+| Oh My Posh | The profile calls `oh-my-posh` by name to render the prompt | `winget install --id JanDeDobbeleer.OhMyPosh -e` | yes |
+| A Nerd Font | Glyphs/icons in the prompt, Terminal-Icons, and the Claude statusline bars | `oh-my-posh font install meslo --headless` (after installing Oh My Posh), then set it as your terminal font | yes |
 
-> `PwshSpectreConsole` (the wizard UI) and the selected PowerShell modules (`z`, `posh-git`, `Terminal-Icons`, `PSReadLine`, …) are installed automatically from the PowerShell Gallery — no manual step and no `PATH` change.
+> `PwshSpectreConsole` (the wizard UI) is installed from the PowerShell Gallery, but the installer **asks first**. It cannot use its own UI to ask, so this is a plain y/N prompt before the wizard starts; declining exits cleanly with the manual command. If PSGallery is not already trusted the prompt says so, because continuing marks it Trusted, a machine-wide setting that is not reverted afterwards. The selected PowerShell modules (`z`, `posh-git`, `Terminal-Icons`, `PSReadLine`) install automatically with no `PATH` change.
+
+> **Any Nerd Font satisfies the requirement.** The prompt, Terminal-Icons and the statusline need the glyph ranges, not one specific family. If you already run CaskaydiaCove NF, FiraCode NF or similar, the wizard detects it and does not offer to install another. When none is found you can select several fonts to install in one go.
 
 **Optional (only if you enable the matching feature)**
 
-| Tool | Needed for | Install |
-| --- | --- | --- |
-| Neovim | The bundled Neovim config, or Neovim as the Git editor | `winget install --id Neovim.Neovim -e` |
-| Node.js | General dev workflows (and npm-based Claude Code install) | `winget install --id OpenJS.NodeJS.LTS -e` |
-| Claude Code CLI | Using the Claude agents/skills/commands the wizard installs into `~/.claude` | Native (recommended): `irm https://claude.ai/install.ps1 \| iex` (installs to `%USERPROFILE%\.local\bin`) &nbsp;·&nbsp; or npm: `npm install -g @anthropic-ai/claude-code` |
-| Herdr | Using the herdr terminal-multiplexer configuration/skill | Windows: see [herdr.dev](https://herdr.dev) (installs to `%LOCALAPPDATA%\Programs\Herdr\bin`) &nbsp;·&nbsp; macOS/Linux: `brew install herdr` or `curl -fsSL https://herdr.dev/install.sh \| sh` |
-| glow | Rendering markdown in the terminal (READMEs, `CLAUDE.md`, notes) | `winget install --id charmbracelet.glow -e` |
-| Internet access at install time | Fetching the Awesome Statusline renderer from GitHub (the statusline area only) | Nothing to install; if offline, the step is skipped with a warning |
+| Tool | Needed for | Install | Auto |
+| --- | --- | --- | --- |
+| Neovim | The bundled Neovim config, or Neovim as the Git editor | `winget install --id Neovim.Neovim -e` | yes |
+| Node.js | General dev workflows (and npm-based Claude Code install) | `winget install --id OpenJS.NodeJS.LTS -e` | yes |
+| Claude Code CLI | Using the Claude agents/skills/commands the wizard installs into `~/.claude` | Native (recommended): `irm https://claude.ai/install.ps1 \| iex` (installs to `%USERPROFILE%\.local\bin`) &nbsp;·&nbsp; or npm: `npm install -g @anthropic-ai/claude-code` | opt-in |
+| Herdr | Using the herdr terminal-multiplexer configuration/skill | Windows: `winget install --id Herdr.Herdr.Preview -e` (installs to `%LOCALAPPDATA%\Programs\Herdr\bin`) &nbsp;·&nbsp; macOS/Linux: `brew install herdr` or `curl -fsSL https://herdr.dev/install.sh \| sh` | yes |
+| glow | Rendering markdown in the terminal (READMEs, `CLAUDE.md`, notes) | `winget install --id charmbracelet.glow -e` | yes |
+| Internet access at install time | Fetching the Awesome Statusline renderer from GitHub (the statusline area only) | Nothing to install; if offline, the step is skipped with a warning | n/a |
+
+> Herdr publishes a preview channel only (`Herdr.Herdr.Preview`); there is no stable winget id. That matches the devkit's own `config.toml`, which pins `channel = "preview"`.
 
 > The wizard installs the Claude assets to `~/.claude` and writes the herdr config to `%APPDATA%\herdr` **regardless** of whether the Claude Code / Herdr binaries are present — but you need the respective CLI installed to actually use them.
 
@@ -65,6 +71,7 @@ Install these **before** running the wizard. [winget](https://learn.microsoft.co
    ```
 
    The wizard will guide you through:
+   - **Prerequisite Tools** - Optionally install anything missing (Git, Oh My Posh, Neovim, Node.js, glow, PowerShell 7, Herdr) with winget, plus one or more Nerd Fonts. Each tool is individually selectable, nothing installs without an explicit tick, and this step runs first so the later steps can see the new tools
    - **Repository Locations** - Select where you store your code
    - **Git Configuration** - Set up your name, email, and directory-specific profiles
    - **Git Editor** - Pick your commit message editor (VS Code, Neovim, Vim, Notepad++, Nano, or custom)
@@ -75,6 +82,7 @@ Install these **before** running the wizard. [winget](https://learn.microsoft.co
 
    The wizard automatically:
    - Backs up your existing configuration files
+   - Refreshes `$env:PATH` in-process after installing a prerequisite, so the Git-editor list and theme scan see it without a restart
    - Generates `.gitconfig` with your settings, carrying over any section the devkit does not author (git-lfs filters, credential helpers, `[gpg "ssh"]`, url rewrites, `safe.directory`) and listing what it kept
    - Creates `~/.gitignore_global` if it is missing, so `core.excludesfile` points at a real file
    - Creates directory-specific Git profiles (e.g., different email for work repos)
@@ -103,7 +111,14 @@ What *does* need to be on `PATH` is the [prerequisite tools](#prerequisites) —
 | `node` / `npm` | `C:\Program Files\nodejs` |
 | `glow` | `%LOCALAPPDATA%\Microsoft\WinGet\Links` (winget shim) |
 
-Because the generated PowerShell profile calls `oh-my-posh` (and, if you set it as the Git editor, `nvim`) **by name**, make sure those are on `PATH` before your first new session — i.e. **open a fresh terminal after installing the prerequisites** so the updated `PATH` is picked up, then run the wizard.
+Because the generated PowerShell profile calls `oh-my-posh` (and, if you set it as the Git editor, `nvim`) **by name**, those need to be on `PATH` before your first new session.
+
+When the wizard installs a prerequisite itself it refreshes `$env:PATH` from the registry in-process, so the later steps (the Git-editor list, the Oh My Posh theme scan) see the new tool immediately. You do not need to restart the wizard. Two things that refresh cannot fix, and which the step warns about:
+
+- **A newly installed font** is not a `PATH` matter at all. Restart the terminal *and* select the font in your terminal profile.
+- **App Execution Alias shims** under `%LOCALAPPDATA%\Microsoft\WindowsApps` may still need a new shell.
+
+If you install the prerequisites by hand instead, open a fresh terminal before running the wizard.
 
 > Herdr, by design, pins its shell to the **App Execution Alias** `pwsh` shim (`%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe`) rather than a version-stamped path, so it survives PowerShell updates. The wizard detects this automatically.
 
@@ -125,6 +140,8 @@ After installation, an in-shell `devkit` command is auto-loaded by your PowerShe
 | `devkit statusline install` / `refresh` | Download the Awesome Statusline renderer from upstream and wire it into `settings.json`. Add `--size <mode>`; without it, a refresh keeps the size you already run |
 | `devkit statusline size <mode>` | Change the size (`xsmall`, `small`, `medium`, `large`, `xlarge`) without downloading anything |
 | `devkit statusline remove` | Unwire the statusline and delete the renderer (both backed up first). `--keep-script` leaves the renderer on disk |
+| `devkit prereqs check` | Report which prerequisite tools, Nerd Font and winget are present, with the install command for anything missing |
+| `devkit prereqs install [name...]` | Install missing prerequisites. `--all` widens the default set, `--yes` skips the confirmation, `--dry-run` prints the commands without running them, `--font <name>` (repeatable) picks the Nerd Fonts |
 | `devkit backups list` | List timestamped backups in `~/.devkit/backups/` |
 | `devkit backups restore <name>` | Restore a backup; the destination is inferred from the name (nvim, gitconfig, PowerShell profile, `CLAUDE.md`, `settings.json`, the statusline renderer, herdr `config.toml`, or a `~/.claude` snapshot merged in non-destructively) |
 | `devkit fix terminal-icons` | Purge a corrupt Terminal-Icons icon cache |

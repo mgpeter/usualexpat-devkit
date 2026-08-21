@@ -9,7 +9,9 @@
 
 .NOTES
     Requires PowerShell 7.0 or higher
-    Requires Administrator privileges for module installation
+    Administrator privileges are recommended: the prerequisites step can install
+    system-wide packages with winget. Use -SkipAdminCheck to run without them
+    (individual package installs may then raise their own elevation prompts).
 #>
 
 [CmdletBinding()]
@@ -35,8 +37,9 @@ $script:DevkitName = "Devkit by Usual Expat"
 if (-not $SkipAdminCheck) {
     $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
     if (-not $isAdmin) {
-        Write-Host "This installer requires Administrator privileges for module installation." -ForegroundColor Red
-        Write-Host "Please run PowerShell as Administrator and try again." -ForegroundColor Yellow
+        Write-Host "This installer requires Administrator privileges." -ForegroundColor Red
+        Write-Host "The prerequisites step installs system-wide packages with winget." -ForegroundColor Yellow
+        Write-Host "Run PowerShell as Administrator, or re-run with -SkipAdminCheck." -ForegroundColor Yellow
         exit 1
     }
 }
@@ -54,21 +57,74 @@ function Install-SpectreConsole {
     $module = Get-Module -ListAvailable -Name $moduleName | Select-Object -First 1
 
     if (-not $module) {
-        Write-Host "Installing $moduleName module..." -ForegroundColor Yellow
+        # This runs BEFORE lib/ is dot-sourced and before any Spectre call - the wizard
+        # UI is what we are about to install - so plain Write-Host/Read-Host only.
+        Write-Host ""
+        Write-Host "$moduleName is required for the wizard's interactive UI." -ForegroundColor Yellow
+        Write-Host "It is installed from the PowerShell Gallery for the current user only:" -ForegroundColor Gray
+        Write-Host "  Install-Module -Name $moduleName -Scope CurrentUser" -ForegroundColor Gray
 
-        # Ensure PSGallery is trusted
-        $gallery = Get-PSRepository -Name "PSGallery" -ErrorAction SilentlyContinue
-        if ($gallery -and $gallery.InstallationPolicy -ne "Trusted") {
-            Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
+        # PowerShellGet v2 and PSResourceGet have different cmdlets. Probing rather than
+        # assuming avoids the silent no-op where Get-PSRepository returns nothing on a
+        # PSResourceGet-only host and the trust step quietly does nothing.
+        $useResourceGet = [bool](Get-Command Install-PSResource -ErrorAction SilentlyContinue)
+        $useModule = [bool](Get-Command Install-Module -ErrorAction SilentlyContinue)
+
+        if (-not $useResourceGet -and -not $useModule) {
+            Write-Host "Neither Install-PSResource nor Install-Module is available on this host." -ForegroundColor Red
+            Write-Host "Install PowerShellGet or PSResourceGet, then re-run the installer." -ForegroundColor Yellow
+            exit 1
         }
 
+        # Surface the machine-wide side effect instead of doing it silently.
+        $needsTrust = $false
+        if ($useResourceGet) {
+            $repo = Get-PSResourceRepository -Name "PSGallery" -ErrorAction SilentlyContinue
+            $needsTrust = ($repo -and -not $repo.Trusted)
+        } else {
+            $gallery = Get-PSRepository -Name "PSGallery" -ErrorAction SilentlyContinue
+            $needsTrust = ($gallery -and $gallery.InstallationPolicy -ne "Trusted")
+        }
+        if ($needsTrust) {
+            Write-Host "Note: PSGallery is not currently trusted. Continuing marks it Trusted so the" -ForegroundColor Yellow
+            Write-Host "      install runs without a per-package confirmation. That is a machine-wide" -ForegroundColor Yellow
+            Write-Host "      setting and it is not reverted afterwards." -ForegroundColor Yellow
+        }
+
+        Write-Host ""
+        $answer = Read-Host "Install $moduleName now? [y/N]"
+        if ("$answer".Trim() -notmatch '^(y|yes)$') {
+            # Declining is a choice, not a failure.
+            Write-Host ""
+            Write-Host "Skipped. Install it yourself with:" -ForegroundColor Yellow
+            Write-Host "  Install-Module -Name $moduleName -Scope CurrentUser" -ForegroundColor Gray
+            Write-Host "then re-run: . ./configuration/install.ps1" -ForegroundColor Gray
+            exit 0
+        }
+
+        Write-Host "Installing $moduleName module..." -ForegroundColor Yellow
+
         try {
-            Install-Module -Name $moduleName -Scope CurrentUser -Force -AllowClobber
+            if ($useResourceGet) {
+                if ($needsTrust) {
+                    Write-Host "Setting PSGallery to Trusted..." -ForegroundColor Gray
+                    Set-PSResourceRepository -Name "PSGallery" -Trusted -ErrorAction SilentlyContinue
+                }
+                Install-PSResource -Name $moduleName -Scope CurrentUser -TrustRepository -Reinstall:$false -ErrorAction Stop
+            } else {
+                if ($needsTrust) {
+                    Write-Host "Setting PSGallery InstallationPolicy to Trusted..." -ForegroundColor Gray
+                    Set-PSRepository -Name "PSGallery" -InstallationPolicy Trusted
+                }
+                Install-Module -Name $moduleName -Scope CurrentUser -Force -AllowClobber
+            }
             Write-Host "$moduleName installed successfully!" -ForegroundColor Green
         }
         catch {
             Write-Host "Failed to install $moduleName : $_" -ForegroundColor Red
-            Write-Host "Please install manually: Install-Module -Name $moduleName -Scope CurrentUser" -ForegroundColor Yellow
+            Write-Host "If you are offline, install it on a connected machine or from a local" -ForegroundColor Yellow
+            Write-Host "repository, then re-run the installer." -ForegroundColor Yellow
+            Write-Host "Manual install: Install-Module -Name $moduleName -Scope CurrentUser" -ForegroundColor Yellow
             exit 1
         }
     }

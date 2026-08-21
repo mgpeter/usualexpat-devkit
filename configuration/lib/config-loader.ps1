@@ -437,6 +437,17 @@ function Get-ExistingConfiguration {
             StatusLineSize    = 'small'
             StatusLineMode    = 'Fresh'
         }
+        Prerequisites = @{
+            Install          = $false
+            Selected         = @()
+            Fonts            = @()
+            Installed        = @()
+            AlreadyInstalled = @()
+            Failed           = @()
+            Skipped          = @()
+            NeedsNewShell    = @()
+            WingetAvailable  = $false
+        }
         _Detection = @{
             GitConfigFound = $false
             ProfileFound = $false
@@ -452,6 +463,10 @@ function Get-ExistingConfiguration {
             StatusLineFound = $false
             StatusLineScriptFound = $false
             StatusLineSize = ''
+            WingetFound = $false
+            Prereqs = @{}
+            PrereqsMissing = @()
+            NerdFontFound = $false
         }
     }
 
@@ -494,6 +509,15 @@ function Get-ExistingConfiguration {
     $config._Detection.StatusLineFound = $claudeConfig.StatusLineWired
     $config._Detection.StatusLineScriptFound = $claudeConfig.StatusLineScriptFound
     $config._Detection.StatusLineSize = $claudeConfig.StatusLineSize
+
+    # Prerequisite tools. -Fast skips the version probes: each one spawns a process and
+    # this runs at wizard startup. The step re-detects with versions when it renders.
+    $winget = Test-WingetAvailable
+    $config._Detection.WingetFound = $winget.Found
+    $config._Detection.Prereqs = Get-PrerequisiteState -Fast
+    $config._Detection.PrereqsMissing = @($config._Detection.Prereqs.Keys |
+        Where-Object { -not $config._Detection.Prereqs[$_].Found })
+    $config._Detection.NerdFontFound = [bool]$config._Detection.Prereqs['nerd-font'].Found
 
     # Load Devkit variables
     $devkitVars = Get-ExistingDevkitVariables -DevkitRoot $DevkitRoot
