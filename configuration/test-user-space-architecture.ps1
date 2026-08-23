@@ -11,11 +11,9 @@
     Run: pwsh -File test-user-space-architecture.ps1
 #>
 
-# Load the config generator
-. "$PSScriptRoot\lib\config-generator.ps1"
-
 $testDir = Join-Path $env:TEMP "devkit-test-$(Get-Random)"
 $originalUserProfile = $env:USERPROFILE
+$originalProfile = $PROFILE
 
 Write-Host "=" * 60 -ForegroundColor Cyan
 Write-Host "Testing User-Space Installation Architecture" -ForegroundColor Cyan
@@ -24,9 +22,19 @@ Write-Host ""
 Write-Host "Test directory: $testDir"
 Write-Host ""
 
-# Override USERPROFILE for testing
+# Override USERPROFILE BEFORE dot-sourcing: lib files compute paths at file scope
+# (backup.ps1's $script:BackupRoot, for one), so a later override comes too late.
 $env:USERPROFILE = $testDir
 New-Item -Path $testDir -ItemType Directory -Force | Out-Null
+
+# $PROFILE does not follow $env:USERPROFILE - it is resolved at PowerShell startup from
+# the Documents folder. Anything reaching Update-PowerShellProfile would otherwise write
+# the developer's real profile while every other path is safely sandboxed.
+$global:PROFILE = Join-Path $testDir "Documents\PowerShell\Microsoft.PowerShell_profile.ps1"
+New-Item -Path (Split-Path $global:PROFILE -Parent) -ItemType Directory -Force | Out-Null
+
+# Load the config generator
+. "$PSScriptRoot\lib\config-generator.ps1"
 
 try {
     # Test 1: Get-DevkitUserRoot
@@ -140,6 +148,7 @@ try {
 } finally {
     # Restore USERPROFILE
     $env:USERPROFILE = $originalUserProfile
+    $global:PROFILE = $originalProfile
 
     # Cleanup
     if (Test-Path $testDir) {

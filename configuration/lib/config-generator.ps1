@@ -618,6 +618,92 @@ function Copy-DevkitTheme {
     }
 }
 
+# The preset used when something needs a Starship config and nobody picked one -
+# `devkit prompt use starship` on a box that has never had one. Nerd Font powerline,
+# to match what the bundled Oh My Posh theme expects of the terminal font.
+$script:DevkitDefaultStarshipPreset = 'gruvbox-rainbow'
+
+function Get-DevkitStarshipConfigPath {
+    <#
+    .SYNOPSIS
+        Returns the path of the devkit-managed starship.toml in user space
+    #>
+    return Join-Path (Join-Path (Get-DevkitUserRoot) "themes") "starship.toml"
+}
+
+function Install-DevkitStarshipConfig {
+    <#
+    .SYNOPSIS
+        Resolves the Starship config for the chosen mode
+    .DESCRIPTION
+        Fresh  - exports $Preset into ~/.devkit/themes/starship.toml
+        Keep   - uses whatever Starship already finds itself; returns "" on purpose
+        Custom - copies $CustomPath into ~/.devkit/themes/starship.toml
+
+        MUST NEVER THROW. Invoke-Installation only aborts the run on a thrown exception,
+        so returning "" is what degrades a starship-less box to a warning. With no config
+        written it deliberately returns "" rather than a path to a file that is not there -
+        Save-VariablesPs1 then omits DEVKIT_STARSHIP_CONFIG and Starship falls back to its
+        own default, which is a working prompt rather than a broken one.
+    .PARAMETER Mode
+        Fresh | Keep | Custom
+    .PARAMETER Preset
+        Preset name for Fresh mode
+    .PARAMETER CustomPath
+        Source .toml for Custom mode
+    .OUTPUTS
+        String - path to the devkit-managed config, or "" when none should be recorded
+    #>
+    param(
+        [ValidateSet('Fresh', 'Keep', 'Custom')]
+        [string]$Mode = 'Fresh',
+
+        [string]$Preset = '',
+
+        [string]$CustomPath = ''
+    )
+
+    try {
+        if ($Mode -eq 'Keep') {
+            return ""
+        }
+
+        $destPath = Get-DevkitStarshipConfigPath
+        $themesDir = Split-Path $destPath -Parent
+        if (-not (Test-Path $themesDir)) {
+            New-Item -Path $themesDir -ItemType Directory -Force | Out-Null
+        }
+
+        # A config we are about to replace is worth keeping - it may be hand-edited.
+        if (Test-Path $destPath) {
+            Backup-ConfigFile -Path $destPath -Description "starship-config" | Out-Null
+        }
+
+        if ($Mode -eq 'Custom') {
+            if (-not $CustomPath -or -not (Test-Path $CustomPath)) {
+                Write-Warning "Starship config not found: $CustomPath"
+                return ""
+            }
+            Copy-Item -Path $CustomPath -Destination $destPath -Force
+            return $destPath
+        }
+
+        $presetName = if ($Preset) { $Preset } else { $script:DevkitDefaultStarshipPreset }
+        $export = Invoke-StarshipPresetExport -PresetName $presetName -DestinationPath $destPath
+
+        # Detection decides success, not the exit code - same rule as Install-Prerequisites.
+        if (Test-Path $destPath) {
+            return $destPath
+        }
+
+        Write-Warning "Could not export the '$presetName' Starship preset: $($export.Output)"
+        return ""
+    } catch {
+        Write-Warning "Failed to resolve Starship configuration: $_"
+        return ""
+    }
+}
+
 #endregion
 
 #region PowerShell Configuration Generation
@@ -627,21 +713,43 @@ function New-VariablesPs1 {
     .SYNOPSIS
         Generates variables.ps1 content for user space installation
     .PARAMETER ThemePath
-        Path to the copied Oh-My-Posh theme file in user space
+        Path to the copied Oh-My-Posh theme file in user space. Written whenever it is
+        known, even for Starship users, so `devkit prompt use oh-my-posh` needs no re-run.
+    .PARAMETER Engine
+        Prompt engine the profile should initialise: oh-my-posh (default) or starship
+    .PARAMETER StarshipConfigPath
+        Path to the devkit-managed starship.toml. Empty means "let Starship find its own",
+        and the DEVKIT_STARSHIP_CONFIG line is omitted entirely.
     .PARAMETER SourceRoot
         Optional path to the source devkit repo (recorded as DEVKIT_REPO_ROOT)
     .OUTPUTS
         String - Generated variables.ps1 content
     #>
     param(
-        [Parameter(Mandatory)]
-        [string]$ThemePath,
+        [string]$ThemePath = "",
+
+        [ValidateSet('oh-my-posh', 'starship')]
+        [string]$Engine = 'oh-my-posh',
+
+        [string]$StarshipConfigPath = "",
 
         [string]$SourceRoot = ""
     )
 
     # Normalize paths to forward slashes
-    $themePath = $ThemePath -replace '\\', '/'
+    $themeLine = ""
+    if ($ThemePath) {
+        $normalizedTheme = $ThemePath -replace '\\', '/'
+        $themeLine = "`$env:DEVKIT_OMP_THEME = `"$normalizedTheme`"`n"
+    }
+
+    # Only written when there IS a config. Pointing STARSHIP_CONFIG at a file that was
+    # never created is worse than leaving Starship on its own default.
+    $starshipLine = ""
+    if ($StarshipConfigPath) {
+        $normalizedStarship = $StarshipConfigPath -replace '\\', '/'
+        $starshipLine = "`$env:DEVKIT_STARSHIP_CONFIG = `"$normalizedStarship`"`n"
+    }
 
     $repoLine = ""
     if ($SourceRoot) {
@@ -654,8 +762,8 @@ function New-VariablesPs1 {
 # Generated by Devkit Installation Wizard
 
 `$env:DEVKIT_ROOT = "`$HOME/.devkit"
-`$env:DEVKIT_OMP_THEME = "$themePath"
-$repoLine
+`$env:DEVKIT_PROMPT_ENGINE = "$Engine"
+$themeLine$starshipLine$repoLine
 "@
 }
 
@@ -665,14 +773,22 @@ function Save-VariablesPs1 {
         Saves the variables.ps1 file to user space
     .PARAMETER ThemePath
         Path to the copied Oh-My-Posh theme file in user space
+    .PARAMETER Engine
+        Prompt engine the profile should initialise: oh-my-posh (default) or starship
+    .PARAMETER StarshipConfigPath
+        Path to the devkit-managed starship.toml, or "" for Starship's own default
     .PARAMETER SourceRoot
         Optional path to the source devkit repo (recorded as DEVKIT_REPO_ROOT)
     .OUTPUTS
         Boolean - True if successful
     #>
     param(
-        [Parameter(Mandatory)]
-        [string]$ThemePath,
+        [string]$ThemePath = "",
+
+        [ValidateSet('oh-my-posh', 'starship')]
+        [string]$Engine = 'oh-my-posh',
+
+        [string]$StarshipConfigPath = "",
 
         [string]$SourceRoot = ""
     )
@@ -681,7 +797,8 @@ function Save-VariablesPs1 {
     $variablesPath = Join-Path $userRoot "variables.ps1"
 
     try {
-        $content = New-VariablesPs1 -ThemePath $ThemePath -SourceRoot $SourceRoot
+        $content = New-VariablesPs1 -ThemePath $ThemePath -Engine $Engine `
+            -StarshipConfigPath $StarshipConfigPath -SourceRoot $SourceRoot
 
         # Ensure directory exists
         if (-not (Test-Path $userRoot)) {
@@ -993,6 +1110,78 @@ function Invoke-OhMyPoshFontInstall {
     return Invoke-NativeCapture -Executable $omp.Path -Arguments @('font', 'install', $FontName, '--headless')
 }
 
+function Get-StarshipPath {
+    <#
+    .SYNOPSIS
+        Resolves the starship binary, PATH first then the winget install locations
+    .OUTPUTS
+        Hashtable from Test-CommandAvailable (Found, Version, Path, Source)
+    #>
+    return Test-CommandAvailable -Name 'starship' `
+        -VersionArgs @('--version') -VersionPattern '([\d\.]+)' `
+        -FallbackPaths @('%LOCALAPPDATA%\Microsoft\WinGet\Links\starship.exe', '%ProgramFiles%\starship\bin\starship.exe')
+}
+
+function Get-StarshipPresetList {
+    <#
+    .SYNOPSIS
+        THE starship preset-listing seam - the names embedded in the installed binary
+    .DESCRIPTION
+        Presets ship inside the binary, so this needs no network - but it does need
+        starship on disk. Returns an empty array on any failure (binary missing, unexpected
+        output) so callers can fall back to a static list instead of erroring.
+
+        Called by name so test-prompt-engine.ps1 can shadow it.
+    .OUTPUTS
+        String[] - preset names, or @() when they cannot be determined
+    #>
+    $starship = Get-StarshipPath
+    if (-not $starship.Found) { return @() }
+
+    $result = Invoke-NativeCapture -Executable $starship.Path -Arguments @('preset', '--list')
+    if (-not $result.Success -or -not $result.Output) { return @() }
+
+    return @(
+        $result.Output -split "`r?`n" |
+            ForEach-Object { $_.Trim() } |
+            Where-Object { $_ -match '^[a-z0-9][a-z0-9-]*$' }
+    )
+}
+
+function Invoke-StarshipPresetExport {
+    <#
+    .SYNOPSIS
+        THE starship preset-export seam - writes one preset to a .toml file
+    .DESCRIPTION
+        `starship preset <name> -o <path>` renders a preset embedded in the binary. No
+        network, but starship must be on disk. Resolved through Test-CommandAvailable so a
+        copy installed moments ago at its well-known path is used even when PATH is stale.
+
+        Called by name so test-prompt-engine.ps1 can shadow it.
+    .PARAMETER PresetName
+        Preset to export (e.g. "gruvbox-rainbow")
+    .PARAMETER DestinationPath
+        Full path of the .toml file to write
+    .OUTPUTS
+        Hashtable with Success, ExitCode, Output, Command. Never throws.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$PresetName,
+
+        [Parameter(Mandatory)]
+        [string]$DestinationPath
+    )
+
+    $starship = Get-StarshipPath
+
+    if (-not $starship.Found) {
+        return @{ Success = $false; ExitCode = -1; Output = 'starship not found'; Command = "starship preset $PresetName -o $DestinationPath" }
+    }
+
+    return Invoke-NativeCapture -Executable $starship.Path -Arguments @('preset', $PresetName, '-o', $DestinationPath)
+}
+
 function Update-SessionPath {
     <#
     .SYNOPSIS
@@ -1250,12 +1439,17 @@ function Invoke-ConfigGeneration {
         UserSpaceInit = $false
         ProfileCopied = ""
         ThemeCopied = ""
+        StarshipConfig = ""
         GitConfig = $false
         ProfileConfigs = @()
         Variables = $false
         Profile = $false
         Errors = @()
     }
+
+    # Pre-PromptEngine configs have no engine key; Oh My Posh stays the default.
+    $engine = $Config.PowerShell.PromptEngine
+    if (-not $engine) { $engine = 'oh-my-posh' }
 
     # Step 1: Initialize user space directory structure
     try {
@@ -1283,10 +1477,14 @@ function Invoke-ConfigGeneration {
         $results.Success = $false
     }
 
-    # Step 3: Copy theme to user space
+    # Step 3: Copy the Oh-My-Posh theme to user space.
+    # Runs whatever the engine, so switching back to Oh My Posh later needs no re-run.
+    # Only fatal when Oh My Posh is the engine actually rendering the prompt.
     try {
-        $results.ThemeCopied = Copy-DevkitTheme -SourceThemePath $Config.PowerShell.OhMyPoshTheme
-        if (-not $results.ThemeCopied) {
+        if ($Config.PowerShell.OhMyPoshTheme) {
+            $results.ThemeCopied = Copy-DevkitTheme -SourceThemePath $Config.PowerShell.OhMyPoshTheme
+        }
+        if (-not $results.ThemeCopied -and $engine -eq 'oh-my-posh') {
             $results.Errors += "Failed to copy theme"
             $results.Success = $false
         }
@@ -1295,11 +1493,27 @@ function Invoke-ConfigGeneration {
         $results.Success = $false
     }
 
-    # Step 4: Generate variables.ps1 in user space
+    # Step 3b: Resolve the Starship config when that is the selected engine
     try {
-        if ($results.ThemeCopied) {
-            $results.Variables = Save-VariablesPs1 -ThemePath $results.ThemeCopied -SourceRoot $SourceRoot
+        if ($engine -eq 'starship') {
+            $results.StarshipConfig = Install-DevkitStarshipConfig `
+                -Mode $(if ($Config.PowerShell.StarshipMode) { $Config.PowerShell.StarshipMode } else { 'Fresh' }) `
+                -Preset $Config.PowerShell.StarshipPreset `
+                -CustomPath $Config.PowerShell.StarshipConfig
         }
+    } catch {
+        $results.Errors += "StarshipConfig: $_"
+        $results.Success = $false
+    }
+
+    # Step 4: Generate variables.ps1 in user space
+    # Not gated on the theme copy: a Starship user with no .omp.json still needs the file.
+    try {
+        $results.Variables = Save-VariablesPs1 `
+            -ThemePath $results.ThemeCopied `
+            -Engine $engine `
+            -StarshipConfigPath $results.StarshipConfig `
+            -SourceRoot $SourceRoot
     } catch {
         $results.Errors += "Variables: $_"
         $results.Success = $false
@@ -2042,6 +2256,9 @@ function Remove-ClaudeStatusLine {
 # - Get-DevkitUserRoot, Initialize-DevkitUserSpace
 # - Copy-DevkitProfile, Copy-DevkitCli, Copy-DevkitTheme
 # - Get-NvimUserRoot, Copy-DevkitNvimConfig
+# Prompt engines:
+# - Get-StarshipPath, Get-StarshipPresetList, Invoke-StarshipPresetExport
+# - Get-DevkitStarshipConfigPath, Install-DevkitStarshipConfig
 # Claude Code & Herdr:
 # - Get-ClaudeUserRoot, Get-HerdrConfigRoot
 # - Copy-DevkitClaudeAgents, Copy-DevkitClaudeSkills, Copy-DevkitClaudeCommands, Copy-DevkitClaudeMd

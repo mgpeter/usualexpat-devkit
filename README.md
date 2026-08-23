@@ -21,7 +21,7 @@ Everything is designed to be **easy to set up, powerful, and visually refined**.
 
 ### Prerequisites
 
-**The wizard can install most of these for you.** Step 2 detects what is missing and offers to install it with [winget](https://learn.microsoft.com/windows/package-manager/winget/) (or the tool's own installer); each tool is individually selectable and nothing is installed without an explicit tick. Install them yourself first if you prefer, or if `winget` is unavailable.
+**The wizard can install most of these for you.** Step 3 detects what is missing and offers to install it with [winget](https://learn.microsoft.com/windows/package-manager/winget/) (or the tool's own installer); each tool is individually selectable and nothing is installed without an explicit tick. Install them yourself first if you prefer, or if `winget` is unavailable.
 
 The **Auto** column shows what the wizard can install: `yes` for winget and font rows, `opt-in` for Claude Code (which runs a script downloaded from the internet, so it is never pre-selected), and `n/a` for anything that is not a package.
 
@@ -31,7 +31,7 @@ The **Auto** column shows what the wizard can install: `yes` for winget and font
 | --- | --- | --- | --- |
 | PowerShell 7+ | The wizard and generated profile require it (`#Requires -Version 7.0`) | `winget install --id Microsoft.PowerShell -e` | yes |
 | Git | Git config generation + aliases | `winget install --id Git.Git -e` | yes |
-| Oh My Posh | The profile calls `oh-my-posh` by name to render the prompt | `winget install --id JanDeDobbeleer.OhMyPosh -e` | yes |
+| Oh My Posh | The default prompt engine, and the Nerd Font installer for either engine | `winget install --id JanDeDobbeleer.OhMyPosh -e` | yes |
 | A Nerd Font | Glyphs/icons in the prompt, Terminal-Icons, and the Claude statusline bars | `oh-my-posh font install meslo --headless` (after installing Oh My Posh), then set it as your terminal font | yes |
 
 > `PwshSpectreConsole` (the wizard UI) is installed from the PowerShell Gallery, but the installer **asks first**. It cannot use its own UI to ask, so this is a plain y/N prompt before the wizard starts; declining exits cleanly with the manual command. If PSGallery is not already trusted the prompt says so, because continuing marks it Trusted, a machine-wide setting that is not reverted afterwards. The selected PowerShell modules (`z`, `posh-git`, `Terminal-Icons`, `PSReadLine`) install automatically with no `PATH` change.
@@ -42,6 +42,7 @@ The **Auto** column shows what the wizard can install: `yes` for winget and font
 
 | Tool | Needed for | Install | Auto |
 | --- | --- | --- | --- |
+| Starship | An alternative prompt engine, if you pick it over Oh My Posh at step 2 | `winget install --id Starship.Starship -e` | yes |
 | Neovim | The bundled Neovim config, or Neovim as the Git editor | `winget install --id Neovim.Neovim -e` | yes |
 | Node.js | General dev workflows (and npm-based Claude Code install) | `winget install --id OpenJS.NodeJS.LTS -e` | yes |
 | Claude Code CLI | Using the Claude agents/skills/commands the wizard installs into `~/.claude` | Native (recommended): `irm https://claude.ai/install.ps1 \| iex` (installs to `%USERPROFILE%\.local\bin`) &nbsp;·&nbsp; or npm: `npm install -g @anthropic-ai/claude-code` | opt-in |
@@ -71,18 +72,19 @@ The **Auto** column shows what the wizard can install: `yes` for winget and font
    ```
 
    The wizard will guide you through:
-   - **Prerequisite Tools** - Optionally install anything missing (Git, Oh My Posh, Neovim, Node.js, glow, PowerShell 7, Herdr) with winget, plus one or more Nerd Fonts. Each tool is individually selectable, nothing installs without an explicit tick, and this step runs first so the later steps can see the new tools
+   - **Prompt Engine** - Choose Oh My Posh (the default) or Starship. This comes first so the next step installs the right binary and the theme step can read its presets
+   - **Prerequisite Tools** - Optionally install anything missing (Git, Oh My Posh, Starship, Neovim, Node.js, glow, PowerShell 7, Herdr) with winget, plus one or more Nerd Fonts. Each tool is individually selectable, nothing installs without an explicit tick, and this step runs before the configuration steps so they can see the new tools
    - **Repository Locations** - Select where you store your code
    - **Git Configuration** - Set up your name, email, and directory-specific profiles
    - **Git Editor** - Pick your commit message editor (VS Code, Neovim, Vim, Notepad++, Nano, or custom)
    - **PowerShell Modules** - Choose which modules to install (z, posh-git, Terminal-Icons, etc.)
-   - **Oh-My-Posh Theme** - Select your terminal theme
+   - **Prompt Theme** - Select an Oh-My-Posh theme, or a Starship preset (also: keep an existing `~/.config/starship.toml`, or point at your own `.toml`)
    - **Neovim Configuration** - Optionally install the bundled Neovim config
    - **Claude Code & Herdr** - Optionally install Claude agents, skills, commands, and `CLAUDE.md` into `~/.claude`, plus the herdr configuration (each area is individually toggleable)
 
    The wizard automatically:
    - Backs up your existing configuration files
-   - Refreshes `$env:PATH` in-process after installing a prerequisite, so the Git-editor list and theme scan see it without a restart
+   - Refreshes `$env:PATH` in-process after installing a prerequisite, so the Git-editor list and the theme/preset scan see it without a restart
    - Generates `.gitconfig` with your settings, carrying over any section the devkit does not author (git-lfs filters, credential helpers, `[gpg "ssh"]`, url rewrites, `safe.directory`) and listing what it kept
    - Creates `~/.gitignore_global` if it is missing, so `core.excludesfile` points at a real file
    - Creates directory-specific Git profiles (e.g., different email for work repos)
@@ -104,6 +106,7 @@ What *does* need to be on `PATH` is the [prerequisite tools](#prerequisites) —
 | --- | --- |
 | `pwsh` | `%LOCALAPPDATA%\Microsoft\WindowsApps` (Store/winget alias) |
 | `oh-my-posh` | `%LOCALAPPDATA%\Programs\oh-my-posh\bin` |
+| `starship` | `%LOCALAPPDATA%\Microsoft\WinGet\Links` (winget shim) |
 | `git` | `C:\Program Files\Git\cmd` |
 | `nvim` | `C:\Program Files\Neovim\bin` |
 | `claude` | `%USERPROFILE%\.local\bin` (native install) |
@@ -111,9 +114,9 @@ What *does* need to be on `PATH` is the [prerequisite tools](#prerequisites) —
 | `node` / `npm` | `C:\Program Files\nodejs` |
 | `glow` | `%LOCALAPPDATA%\Microsoft\WinGet\Links` (winget shim) |
 
-Because the generated PowerShell profile calls `oh-my-posh` (and, if you set it as the Git editor, `nvim`) **by name**, those need to be on `PATH` before your first new session.
+Because the generated PowerShell profile calls your prompt engine - `oh-my-posh` or `starship` - (and, if you set it as the Git editor, `nvim`) **by name**, those need to be on `PATH` before your first new session.
 
-When the wizard installs a prerequisite itself it refreshes `$env:PATH` from the registry in-process, so the later steps (the Git-editor list, the Oh My Posh theme scan) see the new tool immediately. You do not need to restart the wizard. Two things that refresh cannot fix, and which the step warns about:
+When the wizard installs a prerequisite itself it refreshes `$env:PATH` from the registry in-process, so the later steps (the Git-editor list, the theme/preset scan) see the new tool immediately. You do not need to restart the wizard. Two things that refresh cannot fix, and which the step warns about:
 
 - **A newly installed font** is not a `PATH` matter at all. Restart the terminal *and* select the font in your terminal profile.
 - **App Execution Alias shims** under `%LOCALAPPDATA%\Microsoft\WindowsApps` may still need a new shell.
@@ -128,9 +131,9 @@ After installation, an in-shell `devkit` command is auto-loaded by your PowerShe
 
 | Command | What it does |
 | --- | --- |
-| `devkit help [topic]` | Full inventory, or one section: `modules`, `aliases`, `keymaps`, `functions`, `git`, `nvim`, `claude`, `herdr`, `statusline`, `env`, `commands` |
+| `devkit help [topic]` | Full inventory, or one section: `modules`, `aliases`, `keymaps`, `functions`, `git`, `nvim`, `claude`, `herdr`, `statusline`, `prompt`, `prereqs`, `env`, `commands` |
 | `devkit version` | Devkit version + install paths |
-| `devkit doctor` | Health checks: profile wiring, modules, tools on `PATH`, nvim/OMP config, **the Claude/Herdr install** (`~/.claude/CLAUDE.md`, the herdr `SessionStart` hook, the hook script, and `%APPDATA%\herdr\config.toml`), **and the statusline** (renderer present with its UTF-8 BOM, `statusLine` wired and its script path resolving) |
+| `devkit doctor` | Health checks: profile wiring, modules, tools on `PATH`, nvim config, the active prompt engine and its theme/preset, **the Claude/Herdr install** (`~/.claude/CLAUDE.md`, the herdr `SessionStart` hook, the hook script, and `%APPDATA%\herdr\config.toml`), **and the statusline** (renderer present with its UTF-8 BOM, `statusLine` wired and its script path resolving) |
 | `devkit find <keyword>` | Search the whole inventory — modules, aliases, keybindings, functions, git aliases, nvim keymaps, bundled Claude agents/commands/skills, and the statusline |
 | `devkit update` | Re-run the installation wizard |
 | `devkit nvim refresh` | Re-copy the bundled Neovim config |
@@ -140,13 +143,45 @@ After installation, an in-shell `devkit` command is auto-loaded by your PowerShe
 | `devkit statusline install` / `refresh` | Download the Awesome Statusline renderer from upstream and wire it into `settings.json`. Add `--size <mode>`; without it, a refresh keeps the size you already run |
 | `devkit statusline size <mode>` | Change the size (`xsmall`, `small`, `medium`, `large`, `xlarge`) without downloading anything |
 | `devkit statusline remove` | Unwire the statusline and delete the renderer (both backed up first). `--keep-script` leaves the renderer on disk |
+| `devkit prompt status` | Show the active prompt engine, both engines' configs, and whether each binary is on `PATH` |
+| `devkit prompt use <engine>` | Switch between `oh-my-posh` and `starship`. Rewrites `~/.devkit/variables.ps1`; applies in new shells |
+| `devkit prompt preset <name>` | Export a Starship preset to `~/.devkit/themes/starship.toml` (backing up any existing one) |
+| `devkit prompt list` | List installed Oh-My-Posh themes and the Starship presets built into your `starship` binary |
 | `devkit prereqs check` | Report which prerequisite tools, Nerd Font and winget are present, with the install command for anything missing |
 | `devkit prereqs install [name...]` | Install missing prerequisites. `--all` widens the default set, `--yes` skips the confirmation, `--dry-run` prints the commands without running them, `--font <name>` (repeatable) picks the Nerd Fonts |
 | `devkit backups list` | List timestamped backups in `~/.devkit/backups/` |
-| `devkit backups restore <name>` | Restore a backup; the destination is inferred from the name (nvim, gitconfig, PowerShell profile, `CLAUDE.md`, `settings.json`, the statusline renderer, herdr `config.toml`, or a `~/.claude` snapshot merged in non-destructively) |
+| `devkit backups restore <name>` | Restore a backup; the destination is inferred from the name (nvim, gitconfig, PowerShell profile, `CLAUDE.md`, `settings.json`, the statusline renderer, herdr `config.toml`, the Starship config, or a `~/.claude` snapshot merged in non-destructively) |
 | `devkit fix terminal-icons` | Purge a corrupt Terminal-Icons icon cache |
 
 > `devkit help` shows a live ✓/✗ next to each Claude/Herdr asset so you can see at a glance what is installed. The `refresh` commands and `backups restore` read the repo path from `$env:DEVKIT_REPO_ROOT` (recorded at install time); if the repo has moved, they print a clear error and everything else keeps working.
+
+#### Prompt engines
+
+The devkit renders your prompt with either [Oh My Posh](https://ohmyposh.dev/) or [Starship](https://starship.rs/). Step 2 of the wizard asks which one; Oh My Posh stays the default, so re-running the installer on an existing machine changes nothing unless you actively pick Starship.
+
+Only the engine you chose is initialised in your profile, but **both configurations are written to `~/.devkit/`**, so switching afterwards needs no re-run and no downloads:
+
+```powershell
+devkit prompt status              # which engine is active, and where each config lives
+devkit prompt use starship        # switch (applies in new shells)
+devkit prompt list                # Oh-My-Posh themes on disk, Starship presets in the binary
+devkit prompt preset tokyo-night  # re-export a Starship preset
+```
+
+| | Oh My Posh | Starship |
+| --- | --- | --- |
+| winget id | `JanDeDobbeleer.OhMyPosh` | `Starship.Starship` |
+| Config lives at | `~/.devkit/themes/<theme>.omp.json` | `~/.devkit/themes/starship.toml` |
+| Pointed at by | `$env:DEVKIT_OMP_THEME` | `$env:DEVKIT_STARSHIP_CONFIG` |
+| Configured from | the bundled theme, an Oh My Posh built-in, or your own `.omp.json` | a built-in preset, an existing `~/.config/starship.toml`, or your own `.toml` |
+
+Starship presets are embedded in `starship.exe` itself, so the theme step and `devkit prompt preset` work offline — but they do need the binary, which is why the engine question comes *before* the prerequisites step. If you decline the install, the wizard falls back to a static preset list and you can export the real thing later.
+
+Choosing "keep the existing `~/.config/starship.toml`" deliberately leaves `DEVKIT_STARSHIP_CONFIG` unset, so Starship finds its own config the way it normally would. The same applies if the export fails: the devkit would rather leave Starship on its default than point `STARSHIP_CONFIG` at a file that was never written.
+
+> **You still want a Nerd Font either way.** Oh My Posh ships the font installer (`oh-my-posh font install`), so the wizard pulls Oh My Posh in when you ask for fonts without it, whichever engine renders your prompt. It says so when it does.
+
+> `$env:DEVKIT_PROMPT_ENGINE` is what the profile switches on. A `variables.ps1` written before this option existed has no such line, and the profile treats that as Oh My Posh — so older installs keep the prompt they had.
 
 #### Claude Code Statusline
 
@@ -171,7 +206,7 @@ The DevKit includes a powerful set of PowerShell features to enhance your develo
 
 #### Visual Enhancements
 
-- **Oh My Posh** integration with a modern, informative prompt
+- **Oh My Posh or Starship** prompt, chosen in the wizard and switchable later with `devkit prompt use`
 - **Terminal Icons** for better file type visualization
 - **Syntax highlighting** for better code readability
 - **Auto-suggestions** for command completion
@@ -301,6 +336,8 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
 
 #### Oh My Posh - Prompt Customization
 
+> One of two prompt engines the devkit can install; see [Prompt engines](#prompt-engines) for choosing between them.
+
 - **Source**: [GitHub - JanDeDobbeleer/oh-my-posh](https://github.com/JanDeDobbeleer/oh-my-posh)
 - **Purpose**: Beautiful and informative terminal prompts
 - **Features**:
@@ -311,6 +348,24 @@ The DevKit uses several powerful PowerShell modules to enhance your development 
 
   ```powershell
   oh-my-posh init pwsh --config <theme-path> | Invoke-Expression
+  ```
+
+#### Starship - Prompt Customization
+
+> The alternative prompt engine; see [Prompt engines](#prompt-engines) for choosing between them.
+
+- **Source**: [GitHub - starship/starship](https://github.com/starship/starship)
+- **Purpose**: A fast, minimal, cross-shell prompt written in Rust
+- **Features**:
+  - Git status integration
+  - Language and toolchain version detection
+  - Presets built into the binary (no download needed)
+- **Usage**:
+
+  ```powershell
+  Invoke-Expression (&starship init powershell)
+  starship preset --list                          # what your binary ships
+  starship preset tokyo-night -o <config-path>    # render one to a .toml
   ```
 
 #### PSFzf - Fuzzy Finder
@@ -410,7 +465,7 @@ Whether you're a **beginner looking for a strong starting point** or a **seasone
   - ✔️ Repository location configuration
   - ✔️ Git profile setup (default + directory-specific profiles)
   - ✔️ PowerShell module selection
-  - ✔️ Oh-My-Posh theme selection
+  - ✔️ Prompt engine choice (Oh My Posh or Starship) with theme/preset selection
   - ✔️ Automatic backup of existing configs
   - ✔️ Update mode for existing installations
 

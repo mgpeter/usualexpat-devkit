@@ -44,6 +44,7 @@ $testConfig = @{
     }
     PowerShell = @{
         Modules = @("z", "posh-git", "Terminal-Icons")
+        PromptEngine = "oh-my-posh"
         OhMyPoshTheme = "C:/repos/devkit/themes/mytheme.omp.json"
     }
 }
@@ -73,16 +74,30 @@ Write-Host $profileConfig
 Write-Host ""
 #endregion
 
-#region Test 4: Generate variables.ps1 content
-Write-Host "=== Test 4: Generated variables.ps1 ===" -ForegroundColor Yellow
-$variablesContent = New-VariablesPs1 -DevkitRoot $devkitRoot -OhMyPoshTheme $testConfig.PowerShell.OhMyPoshTheme
+#region Test 4: Generate variables.ps1 content (Oh My Posh)
+Write-Host "=== Test 4: Generated variables.ps1 (oh-my-posh) ===" -ForegroundColor Yellow
+$variablesContent = New-VariablesPs1 `
+    -ThemePath $testConfig.PowerShell.OhMyPoshTheme `
+    -Engine 'oh-my-posh' `
+    -SourceRoot $devkitRoot
 Write-Host $variablesContent
+Write-Host ""
+#endregion
+
+#region Test 4b: Generate variables.ps1 content (Starship)
+Write-Host "=== Test 4b: Generated variables.ps1 (starship) ===" -ForegroundColor Yellow
+$starshipVariables = New-VariablesPs1 `
+    -ThemePath $testConfig.PowerShell.OhMyPoshTheme `
+    -Engine 'starship' `
+    -StarshipConfigPath "C:/Users/test/.devkit/themes/starship.toml" `
+    -SourceRoot $devkitRoot
+Write-Host $starshipVariables
 Write-Host ""
 #endregion
 
 #region Test 5: Generate profile snippet
 Write-Host "=== Test 5: PowerShell Profile Snippet ===" -ForegroundColor Yellow
-$snippet = New-ProfileSnippet -DevkitRoot $devkitRoot
+$snippet = New-ProfileSnippet
 Write-Host $snippet
 Write-Host ""
 #endregion

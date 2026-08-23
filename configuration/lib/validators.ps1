@@ -612,13 +612,24 @@ function Get-DevkitPrerequisites {
             InstallHint = 'winget install --id Git.Git -e'; HelpUrl = ''
         }
         @{
-            Key = 'oh-my-posh'; Name = 'Oh My Posh'; Description = 'The profile calls oh-my-posh by name to render the prompt'
+            Key = 'oh-my-posh'; Name = 'Oh My Posh'; Description = 'Renders the prompt when selected, and installs Nerd Fonts for either engine'
             Mechanism = 'winget'; WingetId = 'JanDeDobbeleer.OhMyPosh'
             Command = 'oh-my-posh'; VersionArgs = @('--version'); VersionPattern = '([\d\.]+)'
             FallbackPaths = @('%LOCALAPPDATA%\Programs\oh-my-posh\bin\oh-my-posh.exe')
             DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
             Tier = 'Required'; PreSelect = $true; HandledBy = 'prereqs'
             InstallHint = 'winget install --id JanDeDobbeleer.OhMyPosh -e'; HelpUrl = ''
+        }
+        @{
+            # The other prompt engine. Optional because Oh My Posh stays the default, but
+            # the wizard promotes whichever engine the user picked in step 2.
+            Key = 'starship'; Name = 'Starship'; Description = 'Alternative prompt engine - the profile calls starship by name when selected'
+            Mechanism = 'winget'; WingetId = 'Starship.Starship'
+            Command = 'starship'; VersionArgs = @('--version'); VersionPattern = '([\d\.]+)'
+            FallbackPaths = @('%LOCALAPPDATA%\Microsoft\WinGet\Links\starship.exe', '%ProgramFiles%\starship\bin\starship.exe')
+            DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
+            Tier = 'Optional'; PreSelect = $false; HandledBy = 'prereqs'
+            InstallHint = 'winget install --id Starship.Starship -e'; HelpUrl = ''
         }
         @{
             Key = 'nerd-font'; Name = 'Nerd Font'; Description = 'Glyphs for the prompt, Terminal-Icons and the Claude statusline'
@@ -804,7 +815,12 @@ function New-DevkitConfig {
         }
         PowerShell = @{
             Modules = @()
+            PromptEngine = "oh-my-posh"  # or "starship"
             OhMyPoshTheme = ""
+            # Empty means "let Starship find its own ~/.config/starship.toml".
+            StarshipConfig = ""
+            StarshipPreset = ""
+            StarshipMode = "Fresh"       # Fresh | Keep | Custom
         }
         Nvim = @{
             Install = $false
@@ -883,8 +899,18 @@ function Test-DevkitConfig {
         $result.Errors += "At least one PowerShell module must be selected"
     }
 
-    # Check Oh-My-Posh theme
-    if (-not (Test-NonEmptyString -Value $Config.PowerShell.OhMyPoshTheme)) {
+    # Check the prompt engine, then whatever that engine needs. A Starship config path
+    # is deliberately NOT required: "Keep" mode leaves it empty so Starship falls back to
+    # its own ~/.config/starship.toml.
+    $engine = $Config.PowerShell.PromptEngine
+    if (-not $engine) { $engine = 'oh-my-posh' }  # pre-PromptEngine configs default to OMP
+
+    if ($engine -notin @('oh-my-posh', 'starship')) {
+        $result.IsValid = $false
+        $result.Errors += "Unknown prompt engine: $engine"
+    }
+
+    if ($engine -eq 'oh-my-posh' -and -not (Test-NonEmptyString -Value $Config.PowerShell.OhMyPoshTheme)) {
         $result.IsValid = $false
         $result.Errors += "Oh-My-Posh theme is required"
     }

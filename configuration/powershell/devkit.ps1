@@ -100,7 +100,7 @@ $script:DevkitRegistry = @{
     )
 
     Commands = @(
-        @{ Name = 'devkit help [topic]';            Description = 'This help, or one section (modules|aliases|keymaps|functions|git|nvim|claude|herdr|statusline|prereqs|env|commands)' }
+        @{ Name = 'devkit help [topic]';            Description = 'This help, or one section (modules|aliases|keymaps|functions|git|nvim|claude|herdr|statusline|prompt|prereqs|env|commands)' }
         @{ Name = 'devkit version';                 Description = 'Devkit version + install paths' }
         @{ Name = 'devkit doctor';                  Description = 'Run health checks' }
         @{ Name = 'devkit find <keyword>';          Description = 'Search inventory for matching rows' }
@@ -113,6 +113,10 @@ $script:DevkitRegistry = @{
         @{ Name = 'devkit statusline refresh';      Description = 'Re-download the renderer, keeping the current size' }
         @{ Name = 'devkit statusline size <mode>';  Description = 'Change size (xsmall|small|medium|large|xlarge) without downloading' }
         @{ Name = 'devkit statusline remove';       Description = 'Unwire the statusline (--keep-script leaves the renderer)' }
+        @{ Name = 'devkit prompt status';           Description = 'Show the active prompt engine and both engines'' configs' }
+        @{ Name = 'devkit prompt use <engine>';     Description = 'Switch the prompt engine (oh-my-posh|starship); applies in new shells' }
+        @{ Name = 'devkit prompt preset <name>';    Description = 'Export a Starship preset to ~/.devkit/themes/starship.toml' }
+        @{ Name = 'devkit prompt list';             Description = 'List installed Oh-My-Posh themes and available Starship presets' }
         @{ Name = 'devkit prereqs check';            Description = 'Report which prerequisite tools and Nerd Font are present' }
         @{ Name = 'devkit prereqs install [name..]'; Description = 'Install missing prerequisites via winget (--all, --yes, --dry-run, --font)' }
         @{ Name = 'devkit backups list';            Description = 'List ~/.devkit/backups/' }
@@ -344,12 +348,13 @@ function Show-DevkitHelp {
         'claude'    { _Devkit-PrintClaudeHerdr }
         'herdr'     { _Devkit-PrintClaudeHerdr }
         'statusline' { _Devkit-PrintClaudeHerdr }
+        'prompt'    { _Devkit-PrintPromptStatus }
         'prereqs'   { _Devkit-PrintPrerequisites }
         'env'       { _Devkit-PrintEnv }
         'commands'  { _Devkit-PrintCommands }
         default {
             Write-Warning "Unknown topic: $Topic"
-            Write-Host "  Topics: modules, aliases, keymaps, functions, git, nvim, claude, herdr, statusline, prereqs, env, commands" -ForegroundColor DarkGray
+            Write-Host "  Topics: modules, aliases, keymaps, functions, git, nvim, claude, herdr, statusline, prompt, prereqs, env, commands" -ForegroundColor DarkGray
         }
     }
     Write-Host ""
@@ -364,10 +369,15 @@ function Show-DevkitVersion {
     Write-Host ""
 
     $items = [ordered]@{
-        'CLI version'      = $script:DevkitCliVersion
-        'DEVKIT_ROOT'      = $env:DEVKIT_ROOT
-        'DEVKIT_REPO_ROOT' = $env:DEVKIT_REPO_ROOT
-        'DEVKIT_OMP_THEME' = $env:DEVKIT_OMP_THEME
+        'CLI version'         = $script:DevkitCliVersion
+        'DEVKIT_ROOT'         = $env:DEVKIT_ROOT
+        'DEVKIT_REPO_ROOT'    = $env:DEVKIT_REPO_ROOT
+        'Prompt engine'       = _Devkit-GetPromptEngine
+        'DEVKIT_OMP_THEME'    = $env:DEVKIT_OMP_THEME
+    }
+
+    if ((_Devkit-GetPromptEngine) -eq 'starship') {
+        $items['DEVKIT_STARSHIP_CONFIG'] = if ($env:DEVKIT_STARSHIP_CONFIG) { $env:DEVKIT_STARSHIP_CONFIG } else { "(Starship default)" }
     }
 
     $profilePath = Join-Path $env:USERPROFILE '.devkit\profile.ps1'
@@ -479,15 +489,34 @@ function Invoke-DevkitDoctor {
         _Devkit-CheckResult WARN 'No Nvim config at $env:LOCALAPPDATA\nvim\init.lua' -Hint 'Run: devkit nvim refresh (or re-run install.ps1)'
     }
 
-    # 6. Oh-My-Posh theme path resolves
-    if ($env:DEVKIT_OMP_THEME) {
-        if (Test-Path $env:DEVKIT_OMP_THEME) {
-            _Devkit-CheckResult OK 'Oh-My-Posh theme resolves' -Detail (Split-Path $env:DEVKIT_OMP_THEME -Leaf)
+    # 6. The selected prompt engine can actually render a prompt. Only the engine that
+    # is live is checked - the other one's config is kept warm on purpose but a missing
+    # binary for it is not a problem the user has today.
+    $doctorEngine = _Devkit-GetPromptEngine
+    if ($doctorEngine -eq 'starship') {
+        if (Get-Command starship -ErrorAction SilentlyContinue) {
+            _Devkit-CheckResult OK 'Starship on PATH'
         } else {
-            _Devkit-CheckResult FAIL 'Oh-My-Posh theme path broken' -Detail $env:DEVKIT_OMP_THEME -Hint 'Run: devkit update'
+            _Devkit-CheckResult FAIL 'Starship is the prompt engine but is not on PATH' -Hint 'Run: devkit prereqs install starship'
+        }
+
+        if (-not $env:DEVKIT_STARSHIP_CONFIG) {
+            _Devkit-CheckResult OK 'Starship config' -Detail 'using Starship default (~/.config/starship.toml)'
+        } elseif (Test-Path $env:DEVKIT_STARSHIP_CONFIG) {
+            _Devkit-CheckResult OK 'Starship config resolves' -Detail (Split-Path $env:DEVKIT_STARSHIP_CONFIG -Leaf)
+        } else {
+            _Devkit-CheckResult FAIL 'Starship config path broken' -Detail $env:DEVKIT_STARSHIP_CONFIG -Hint 'Run: devkit prompt preset gruvbox-rainbow'
         }
     } else {
-        _Devkit-CheckResult WARN 'Oh-My-Posh theme not set' -Hint 'Run: devkit update'
+        if ($env:DEVKIT_OMP_THEME) {
+            if (Test-Path $env:DEVKIT_OMP_THEME) {
+                _Devkit-CheckResult OK 'Oh-My-Posh theme resolves' -Detail (Split-Path $env:DEVKIT_OMP_THEME -Leaf)
+            } else {
+                _Devkit-CheckResult FAIL 'Oh-My-Posh theme path broken' -Detail $env:DEVKIT_OMP_THEME -Hint 'Run: devkit update'
+            }
+        } else {
+            _Devkit-CheckResult WARN 'Oh-My-Posh theme not set' -Hint 'Run: devkit update'
+        }
     }
 
     # 7. External tools the devkit depends on but does not vendor. The wizard's
@@ -507,7 +536,10 @@ function Invoke-DevkitDoctor {
         }
     }
     if ($prereqCatalog) {
-        foreach ($row in ($prereqCatalog | Where-Object { $_.Command })) {
+        # The unselected prompt engine is skipped: check 6 already covers the live one,
+        # and warning that starship is missing on an Oh My Posh box is just noise.
+        $otherEngine = if ($doctorEngine -eq 'starship') { 'oh-my-posh' } else { 'starship' }
+        foreach ($row in ($prereqCatalog | Where-Object { $_.Command -and $_.Key -ne $otherEngine })) {
             $cmd = Get-Command $row.Command -ErrorAction SilentlyContinue
             if ($cmd) {
                 _Devkit-CheckResult OK "$($row.Command) on PATH" -Detail $cmd.Source
@@ -1045,6 +1077,183 @@ function Invoke-DevkitStatusline {
 #endregion
 
 
+#region Subcommand: prompt
+
+function _Devkit-GetPromptEngine {
+    # The engine variables.ps1 recorded. Absent means a pre-Starship install, and the
+    # profile's own switch treats that as Oh My Posh - so this must agree with it.
+    if ($env:DEVKIT_PROMPT_ENGINE -in @('oh-my-posh', 'starship')) {
+        return $env:DEVKIT_PROMPT_ENGINE
+    }
+    return 'oh-my-posh'
+}
+
+function _Devkit-GetOmpThemePath {
+    # Prefer the env var, but fall back to what is on disk. `devkit prompt use` rewrites
+    # the WHOLE of variables.ps1, so reading only the env var would silently drop the
+    # theme line in any shell that has not sourced variables.ps1 yet - which is exactly
+    # the shell you are in right after a first install.
+    if ($env:DEVKIT_OMP_THEME) { return $env:DEVKIT_OMP_THEME }
+
+    $themesDir = Join-Path $env:USERPROFILE '.devkit\themes'
+    $theme = Get-ChildItem -Path $themesDir -Filter '*.omp.json' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($theme) { return $theme.FullName }
+    return ''
+}
+
+function _Devkit-GetStarshipConfigPath {
+    # Same reasoning as _Devkit-GetOmpThemePath. Empty is a legitimate answer here: it
+    # means "let Starship find its own ~/.config/starship.toml".
+    if ($env:DEVKIT_STARSHIP_CONFIG) { return $env:DEVKIT_STARSHIP_CONFIG }
+
+    $onDisk = Join-Path $env:USERPROFILE '.devkit\themes\starship.toml'
+    if (Test-Path $onDisk) { return $onDisk }
+    return ''
+}
+
+function _Devkit-PrintPromptStatus {
+    $engine = _Devkit-GetPromptEngine
+    $engineName = if ($engine -eq 'starship') { 'Starship' } else { 'Oh My Posh' }
+
+    Write-Host ""
+    Write-Host "  Prompt engine" -ForegroundColor Cyan
+    Write-Host ""
+    _Devkit-WriteRow -Left 'Active' -Right $engineName -Pad 20
+
+    $omp = Get-Command oh-my-posh -ErrorAction SilentlyContinue
+    _Devkit-WriteRow -Left 'oh-my-posh' -Right $(if ($omp) { $omp.Source } else { '(not on PATH)' }) -Pad 20
+    $themePath = _Devkit-GetOmpThemePath
+    _Devkit-WriteRow -Left '  theme' -Right $(if ($themePath) { $themePath } else { '(not set)' }) -Pad 20
+
+    $starship = Get-Command starship -ErrorAction SilentlyContinue
+    _Devkit-WriteRow -Left 'starship' -Right $(if ($starship) { $starship.Source } else { '(not on PATH)' }) -Pad 20
+    $starshipCfg = _Devkit-GetStarshipConfigPath
+    _Devkit-WriteRow -Left '  config' -Right $(if ($starshipCfg) { $starshipCfg } else { '(Starship default)' }) -Pad 20
+
+    Write-Host ""
+    Write-Host "  Switch with: devkit prompt use <oh-my-posh|starship>" -ForegroundColor DarkGray
+    Write-Host "  Changes apply in new shells." -ForegroundColor DarkGray
+    Write-Host ""
+}
+
+function Invoke-DevkitPrompt {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)][string]$Action = 'status',
+        [Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest
+    )
+
+    switch ($Action.ToLower()) {
+        'status' { _Devkit-PrintPromptStatus }
+
+        'list' {
+            Write-Host ""
+            Write-Host "  Oh-My-Posh themes in ~/.devkit/themes" -ForegroundColor Cyan
+            Write-Host ""
+            $themesDir = Join-Path $env:USERPROFILE '.devkit\themes'
+            $themes = @(Get-ChildItem -Path $themesDir -Filter '*.omp.json' -ErrorAction SilentlyContinue)
+            if ($themes.Count -eq 0) {
+                Write-Host "    (none)" -ForegroundColor DarkGray
+            } else {
+                foreach ($t in $themes) { Write-Host "    $($t.Name)" }
+            }
+
+            Write-Host ""
+            Write-Host "  Starship presets" -ForegroundColor Cyan
+            Write-Host ""
+            if (-not (Get-Command starship -ErrorAction SilentlyContinue)) {
+                Write-Host "    (starship not installed - run: devkit prereqs install starship)" -ForegroundColor DarkGray
+            } else {
+                # Presets are embedded in the binary, so this is offline and cheap.
+                $presets = @(& starship preset --list 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                foreach ($preset in $presets) { Write-Host "    $preset" }
+            }
+            Write-Host ""
+        }
+
+        'use' {
+            $target = if ($Rest -and $Rest.Count -gt 0) { $Rest[0].ToLower() } else { '' }
+            if ($target -notin @('oh-my-posh', 'starship')) {
+                Write-Warning "Usage: devkit prompt use <oh-my-posh|starship>"
+                return
+            }
+
+            $libPaths = _Devkit-ResolveGenerator
+            if (-not $libPaths) { return }
+            foreach ($lib in $libPaths) { . $lib }
+
+            # Switching to Starship on a box that never had a config: give it one rather
+            # than leaving the user with a bare default they did not ask for.
+            $starshipConfig = _Devkit-GetStarshipConfigPath
+            if ($target -eq 'starship') {
+                if (-not (Get-Command starship -ErrorAction SilentlyContinue)) {
+                    Write-Host "ERROR: " -ForegroundColor Red -NoNewline
+                    Write-Host "starship is not on PATH. Run: devkit prereqs install starship"
+                    return
+                }
+                if (-not $starshipConfig -or -not (Test-Path $starshipConfig)) {
+                    Write-Host "No Starship config yet; exporting the default preset..." -ForegroundColor DarkGray
+                    $starshipConfig = Install-DevkitStarshipConfig -Mode Fresh
+                }
+            }
+
+            $saved = Save-VariablesPs1 `
+                -ThemePath (_Devkit-GetOmpThemePath) `
+                -Engine $target `
+                -StarshipConfigPath $starshipConfig `
+                -SourceRoot $env:DEVKIT_REPO_ROOT
+
+            if (-not $saved) {
+                Write-Host "Failed to update variables.ps1." -ForegroundColor Red
+                return
+            }
+
+            Write-Host "Prompt engine set to " -NoNewline
+            Write-Host $target -ForegroundColor Green -NoNewline
+            Write-Host ". Open a new shell to see it."
+        }
+
+        'preset' {
+            $preset = if ($Rest -and $Rest.Count -gt 0) { $Rest[0] } else { '' }
+            if (-not $preset) {
+                Write-Warning "Usage: devkit prompt preset <name>   (see: devkit prompt list)"
+                return
+            }
+
+            $libPaths = _Devkit-ResolveGenerator
+            if (-not $libPaths) { return }
+            foreach ($lib in $libPaths) { . $lib }
+
+            $dest = Install-DevkitStarshipConfig -Mode Fresh -Preset $preset
+            if (-not $dest) {
+                Write-Host "Failed to export the '$preset' preset." -ForegroundColor Red
+                return
+            }
+
+            # Re-write variables.ps1 so DEVKIT_STARSHIP_CONFIG points at the new file
+            # even when the user was previously on Starship's own default.
+            Save-VariablesPs1 `
+                -ThemePath (_Devkit-GetOmpThemePath) `
+                -Engine (_Devkit-GetPromptEngine) `
+                -StarshipConfigPath $dest `
+                -SourceRoot $env:DEVKIT_REPO_ROOT | Out-Null
+
+            Write-Host "Wrote preset '$preset' to " -NoNewline
+            Write-Host $dest -ForegroundColor Green
+            if ((_Devkit-GetPromptEngine) -ne 'starship') {
+                Write-Host "Starship is not the active engine. Switch with: devkit prompt use starship" -ForegroundColor DarkGray
+            }
+        }
+
+        default {
+            Write-Warning "Usage: devkit prompt status|use <engine>|preset <name>|list"
+        }
+    }
+}
+
+#endregion
+
 #region Subcommand: prereqs
 
 function _Devkit-ResolveValidators {
@@ -1326,6 +1535,7 @@ function Invoke-DevkitBackups {
                 '^claude-settings_'      { $dest = Join-Path $env:USERPROFILE '.claude\settings.json'; break }
                 '^claude-statusline_'    { $dest = Join-Path $env:USERPROFILE '.claude\awesome-statusline.ps1'; break }
                 '^herdr-config_'         { $dest = Join-Path $env:APPDATA 'herdr\config.toml'; break }
+                '^starship-config_'      { $dest = Join-Path $env:USERPROFILE '.devkit\themes\starship.toml'; break }
                 '^claude_' {
                     $dest = Join-Path $env:USERPROFILE '.claude'
                     $mergeIntoClaude = $true
@@ -1450,6 +1660,7 @@ function devkit {
         'claude'  { Invoke-DevkitClaude @Rest }
         'herdr'   { Invoke-DevkitHerdr @Rest }
         'statusline' { Invoke-DevkitStatusline @Rest }
+        'prompt'  { Invoke-DevkitPrompt @Rest }
         'prereqs' { Invoke-DevkitPrereqs @Rest }
         'backups' { Invoke-DevkitBackups @Rest }
         'fix'     { Invoke-DevkitFix @Rest }
@@ -1480,15 +1691,16 @@ Register-ArgumentCompleter -CommandName devkit -ScriptBlock {
     switch ($position) {
         1 {
             # Top-level commands
-            $candidates = @('help', 'version', 'doctor', 'find', 'update', 'nvim', 'claude', 'herdr', 'statusline', 'prereqs', 'backups', 'fix')
+            $candidates = @('help', 'version', 'doctor', 'find', 'update', 'nvim', 'claude', 'herdr', 'statusline', 'prompt', 'prereqs', 'backups', 'fix')
         }
         2 {
             switch ($tokens[1].ToLower()) {
-                'help'    { $candidates = @('modules', 'aliases', 'keymaps', 'functions', 'git', 'nvim', 'claude', 'herdr', 'statusline', 'prereqs', 'env', 'commands') }
+                'help'    { $candidates = @('modules', 'aliases', 'keymaps', 'functions', 'git', 'nvim', 'claude', 'herdr', 'statusline', 'prompt', 'prereqs', 'env', 'commands') }
                 'nvim'    { $candidates = @('refresh') }
                 'claude'  { $candidates = @('refresh', '--force') }
                 'herdr'   { $candidates = @('refresh') }
                 'statusline' { $candidates = @('status', 'install', 'refresh', 'size', 'remove', '--size', '--keep-script') }
+                'prompt'  { $candidates = @('status', 'use', 'preset', 'list') }
                 'prereqs' { $candidates = @('check', 'install', '--all', '--yes', '--dry-run', '--font') }
                 'backups' { $candidates = @('list', 'restore') }
                 'fix'     { $candidates = @('terminal-icons') }
@@ -1502,6 +1714,17 @@ Register-ArgumentCompleter -CommandName devkit -ScriptBlock {
             }
             if ($tokens[1].ToLower() -eq 'statusline' -and $tokens[2].ToLower() -in @('size', '--size')) {
                 $candidates = @('xsmall', 'small', 'medium', 'large', 'xlarge')
+            }
+            if ($tokens[1].ToLower() -eq 'prompt' -and $tokens[2].ToLower() -eq 'use') {
+                $candidates = @('oh-my-posh', 'starship')
+            }
+            if ($tokens[1].ToLower() -eq 'prompt' -and $tokens[2].ToLower() -eq 'preset') {
+                # Completion must never throw or print, so a missing binary yields nothing.
+                if (Get-Command starship -ErrorAction SilentlyContinue) {
+                    try {
+                        $candidates = @(& starship preset --list 2>$null | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^[a-z0-9][a-z0-9-]*$' })
+                    } catch { $candidates = @() }
+                }
             }
             if ($tokens[1].ToLower() -eq 'backups' -and $tokens[2].ToLower() -eq 'restore') {
                 $backupRoot = Join-Path $env:USERPROFILE '.devkit\backups'

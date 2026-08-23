@@ -42,6 +42,12 @@ $env:APPDATA = Join-Path $sandbox "appdata"
 $env:LOCALAPPDATA = Join-Path $sandbox "localappdata"
 New-Item -Path $env:USERPROFILE, $env:APPDATA, $env:LOCALAPPDATA -ItemType Directory -Force | Out-Null
 
+# $PROFILE is an automatic variable resolved at PowerShell startup from the Documents
+# folder (often OneDrive-redirected). It is NOT derived from $env:USERPROFILE, so the
+# redirect above does not contain code that reads or writes it. Override it explicitly.
+$global:PROFILE = Join-Path $env:USERPROFILE "Documents\PowerShell\Microsoft.PowerShell_profile.ps1"
+New-Item -Path (Split-Path $global:PROFILE -Parent) -ItemType Directory -Force | Out-Null
+
 # A stale override from the caller's shell would defeat the stub below.
 $env:DEVKIT_STATUSLINE_SOURCE = $null
 

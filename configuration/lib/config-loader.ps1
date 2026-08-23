@@ -130,6 +130,7 @@ function Get-ExistingPowerShellConfig {
         DevkitMarker = $false
         VariablesPath = ""
         OhMyPoshTheme = ""
+        PromptEngine = ""
     }
 
     if (-not (Test-Path $PROFILE)) {
@@ -155,6 +156,12 @@ function Get-ExistingPowerShellConfig {
         # Try to find Oh-My-Posh theme
         if ($content -match 'oh-my-posh.*--config\s+"?([^"]+\.omp\.json)"?') {
             $result.OhMyPoshTheme = $Matches[1]
+            $result.PromptEngine = 'oh-my-posh'
+        }
+
+        # A hand-rolled starship init in the profile counts as "already on starship"
+        if ($content -match 'starship\s+init\s+powershell') {
+            $result.PromptEngine = 'starship'
         }
     }
     catch {
@@ -300,10 +307,14 @@ function Get-ExistingDevkitVariables {
         DevkitRoot = ""
         PowerShellConfig = ""
         OhMyPoshTheme = ""
+        PromptEngine = ""
+        StarshipConfig = ""
     }
 
-    # Try common locations
+    # Try common locations. ~/.devkit/variables.ps1 comes first because that is where
+    # Save-VariablesPs1 actually writes - the paths below are legacy layouts.
     $possiblePaths = @()
+    $possiblePaths += Join-Path $env:USERPROFILE '.devkit\variables.ps1'
 
     if ($DevkitRoot) {
         $possiblePaths += Join-Path $DevkitRoot "configuration\powershell\variables.ps1"
@@ -335,6 +346,14 @@ function Get-ExistingDevkitVariables {
 
                 if ($content -match '\$env:DEVKIT_OMP_THEME\s*=\s*"([^"]+)"') {
                     $result.OhMyPoshTheme = $Matches[1]
+                }
+
+                if ($content -match '\$env:DEVKIT_PROMPT_ENGINE\s*=\s*"([^"]+)"') {
+                    $result.PromptEngine = $Matches[1]
+                }
+
+                if ($content -match '\$env:DEVKIT_STARSHIP_CONFIG\s*=\s*"([^"]+)"') {
+                    $result.StarshipConfig = $Matches[1]
                 }
             }
             catch {
@@ -414,7 +433,11 @@ function Get-ExistingConfiguration {
         }
         PowerShell = @{
             Modules = @()
+            PromptEngine = "oh-my-posh"
             OhMyPoshTheme = ""
+            StarshipConfig = ""
+            StarshipPreset = ""
+            StarshipMode = "Fresh"
         }
         Nvim = @{
             Install = $false
@@ -467,6 +490,8 @@ function Get-ExistingConfiguration {
             Prereqs = @{}
             PrereqsMissing = @()
             NerdFontFound = $false
+            StarshipConfigFound = $false
+            StarshipConfigPath = ''
         }
     }
 
@@ -488,6 +513,9 @@ function Get-ExistingConfiguration {
 
     if ($psConfig.OhMyPoshTheme) {
         $config.PowerShell.OhMyPoshTheme = $psConfig.OhMyPoshTheme
+    }
+    if ($psConfig.PromptEngine) {
+        $config.PowerShell.PromptEngine = $psConfig.PromptEngine
     }
 
     # Load Neovim config info
@@ -525,6 +553,23 @@ function Get-ExistingConfiguration {
 
     if ($devkitVars.OhMyPoshTheme -and -not $config.PowerShell.OhMyPoshTheme) {
         $config.PowerShell.OhMyPoshTheme = $devkitVars.OhMyPoshTheme
+    }
+
+    # variables.ps1 is the authoritative record of the engine - the profile scrape above
+    # only ever sees a hand-rolled init, which is the rarer case.
+    if ($devkitVars.PromptEngine) {
+        $config.PowerShell.PromptEngine = $devkitVars.PromptEngine
+    }
+    if ($devkitVars.StarshipConfig) {
+        $config.PowerShell.StarshipConfig = $devkitVars.StarshipConfig
+        $config.PowerShell.StarshipMode = 'Custom'
+    }
+
+    # Starship's own default location. Its presence is what lets the wizard offer "Keep".
+    $starshipDefault = Join-Path $env:USERPROFILE ".config\starship.toml"
+    if (Test-Path $starshipDefault) {
+        $config._Detection.StarshipConfigFound = $true
+        $config._Detection.StarshipConfigPath = $starshipDefault
     }
 
     # Detect repo locations

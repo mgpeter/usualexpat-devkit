@@ -11,7 +11,7 @@
 
 # The single place the wizard's step count lives. Show-StepHeader defaults to it and
 # every call site passes it, so inserting a step is a one-line change here.
-$script:WizardTotalSteps = 11
+$script:WizardTotalSteps = 12
 
 # Wizard state
 $script:WizardState = @{
@@ -27,10 +27,21 @@ $script:WizardState = @{
         }
         PowerShell = @{
             Modules = @()
+            PromptEngine = "oh-my-posh"
             OhMyPoshTheme = ""
+            StarshipConfig = ""
+            StarshipPreset = ""
+            StarshipMode = "Fresh"
         }
     }
 }
+
+# Fallback preset names for when starship is not on disk yet and `starship preset --list`
+# cannot be asked. Same role as $script:AvailableNerdFonts below.
+$script:AvailableStarshipPresets = @(
+    'gruvbox-rainbow', 'tokyo-night', 'pastel-powerline', 'catppuccin-powerline',
+    'jetpack', 'nerd-font-symbols', 'bracketed-segments', 'plain-text-symbols', 'no-nerd-font'
+)
 
 #region Welcome Screen
 
@@ -52,7 +63,7 @@ This wizard will help you configure:
   - Git profiles (name, email, directory mappings)
   - Repository locations
   - PowerShell modules
-  - Oh-My-Posh theme
+  - Prompt engine (Oh My Posh or Starship) and its theme
 
 Let's get your development environment set up!
 "@
@@ -145,6 +156,82 @@ function Get-Confirmation {
 
 #endregion
 
+#region Prompt Engine Step
+
+function Show-PromptEngineStep {
+    <#
+    .SYNOPSIS
+        Wizard step for choosing which prompt engine renders the shell prompt
+    .DESCRIPTION
+        RUNS BEFORE THE PREREQUISITES STEP, and that ordering is the whole point: the
+        prerequisites step is what installs starship.exe and then refreshes PATH in
+        process. The later theme step calls `starship preset --list` to populate its
+        picker, so asking after prerequisites would leave the picker empty exactly when
+        it matters.
+
+        Oh My Posh stays the default so re-running the installer on an existing box
+        changes nothing unless the user actively picks Starship.
+    .PARAMETER Config
+        Current DevkitConfig hashtable
+    .OUTPUTS
+        Updated configuration hashtable
+    #>
+    param(
+        [hashtable]$Config
+    )
+
+    Show-StepHeader -StepNumber 2 -StepTitle "Prompt Engine" -TotalSteps $script:WizardTotalSteps
+
+    # An older config-loader shape has no engine keys; seed them before reading.
+    if (-not $Config.PowerShell.ContainsKey('PromptEngine')) { $Config.PowerShell.PromptEngine = 'oh-my-posh' }
+    if (-not $Config.PowerShell.ContainsKey('StarshipConfig')) { $Config.PowerShell.StarshipConfig = '' }
+    if (-not $Config.PowerShell.ContainsKey('StarshipPreset')) { $Config.PowerShell.StarshipPreset = '' }
+    if (-not $Config.PowerShell.ContainsKey('StarshipMode')) { $Config.PowerShell.StarshipMode = 'Fresh' }
+
+    Write-SpectreHost "Choose what renders your PowerShell prompt."
+    Write-SpectreHost "[dim]Both write their config to ~/.devkit/, so 'devkit prompt use <engine>' switches[/]"
+    Write-SpectreHost "[dim]later without re-running this installer. Either way you want a Nerd Font.[/]"
+    Write-Host ""
+
+    $ompLabel = "Oh My Posh - the devkit default, bundled orange powerline theme"
+    $starshipLabel = "Starship - fast Rust prompt, configured from a built-in preset"
+
+    # Detected value wins, so re-running never silently changes a working setup.
+    # Read-SpectreSelection highlights index 0, so the default is moved to the front.
+    $current = $Config.PowerShell.PromptEngine
+    if ($current -notin @('oh-my-posh', 'starship')) { $current = 'oh-my-posh' }
+
+    if ($Config._Detection -and $Config._Detection.VariablesFound) {
+        $currentName = if ($current -eq 'starship') { 'Starship' } else { 'Oh My Posh' }
+        Write-SpectreHost "[yellow]Currently configured: $currentName[/]"
+        Write-Host ""
+    }
+
+    $choices = if ($current -eq 'starship') { @($starshipLabel, $ompLabel) } else { @($ompLabel, $starshipLabel) }
+
+    $selected = Read-SpectreSelection -Title "Prompt engine" -Choices $choices -Color Blue
+    $Config.PowerShell.PromptEngine = if ($selected -eq $starshipLabel) { 'starship' } else { 'oh-my-posh' }
+
+    Write-Host ""
+    if ($Config.PowerShell.PromptEngine -eq 'starship') {
+        Write-SpectreHost "[green]Selected: Starship[/]"
+        $starship = Test-CommandAvailable -Name 'starship' -VersionArgs @('--version') -VersionPattern '([\d\.]+)' `
+            -FallbackPaths @('%LOCALAPPDATA%\Microsoft\WinGet\Links\starship.exe', '%ProgramFiles%\starship\bin\starship.exe')
+        if ($starship.Found) {
+            $versionText = if ($starship.Version) { "v$($starship.Version)" } else { "(version unknown)" }
+            Write-SpectreHost "[dim]Detected starship $versionText at $($starship.Path)[/]"
+        } else {
+            Write-SpectreHost "[yellow]starship is not installed yet - tick it in the next step.[/]"
+        }
+    } else {
+        Write-SpectreHost "[green]Selected: Oh My Posh[/]"
+    }
+
+    return $Config
+}
+
+#endregion
+
 #region Prerequisites Step
 
 # Nerd Fonts offered when none is installed. Meslo is first because
@@ -176,7 +263,7 @@ function Show-PrerequisitesStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 2 -StepTitle "Prerequisite Tools" -TotalSteps $script:WizardTotalSteps
+    Show-StepHeader -StepNumber 3 -StepTitle "Prerequisite Tools" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "The devkit configures these tools; it can also install the missing ones for you."
     Write-SpectreHost "[dim]Installs run now, not at the end, so later steps can see the new tools.[/]"
@@ -193,6 +280,23 @@ function Show-PrerequisitesStep {
 
     $catalog = Get-DevkitPrerequisites
     $state = Get-PrerequisiteState -Catalog $catalog
+
+    # Re-tier the two prompt engines around the choice made in step 2. Get-DevkitPrerequisites
+    # hands back fresh hashtables on every call, so this only affects the current step.
+    # The unselected engine is left in the list rather than hidden: Oh My Posh is still the
+    # Nerd Font installer, and a starship user may well want it for that.
+    $promptEngine = $Config.PowerShell.PromptEngine
+    if (-not $promptEngine) { $promptEngine = 'oh-my-posh' }
+    foreach ($row in $catalog) {
+        if ($row.Key -notin @('oh-my-posh', 'starship')) { continue }
+        if ($row.Key -eq $promptEngine) {
+            $row.Tier = 'Required'
+            $row.PreSelect = $true
+        } else {
+            $row.Tier = 'Optional'
+            $row.PreSelect = $false
+        }
+    }
 
     # --- Detection table -----------------------------------------------------
     $rows = foreach ($row in $catalog) {
@@ -282,6 +386,15 @@ function Show-PrerequisitesStep {
     $keys = @()
     foreach ($label in $choices.Keys) {
         if ($selected -contains $label) { $keys += $choices[$label] }
+    }
+
+    # Nerd Fonts are installed BY oh-my-posh (Mechanism 'omp-font'), so a font tick with
+    # no oh-my-posh on the box would be silently dropped by the dependency guard in
+    # Install-Prerequisites. Pull it in rather than let the fonts quietly not happen.
+    if ($keys -contains 'nerd-font' -and $keys -notcontains 'oh-my-posh' -and -not $state['oh-my-posh'].Found) {
+        Write-Host ""
+        Write-SpectreHost "[yellow]Adding Oh My Posh: it ships the Nerd Font installer, whichever prompt engine you use.[/]"
+        $keys = @('oh-my-posh') + $keys
     }
 
     if ($keys.Count -eq 0) {
@@ -543,7 +656,7 @@ function Show-RepoLocationsStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 3 -StepTitle "Repository Locations" -TotalSteps $script:WizardTotalSteps
+    Show-StepHeader -StepNumber 4 -StepTitle "Repository Locations" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Where do you store your code repositories?"
     Write-SpectreHost "[dim]These paths will be used for Git profile directory matching.[/]"
@@ -791,7 +904,7 @@ function Show-GitConfigStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 4 -StepTitle "Git Configuration" -TotalSteps $script:WizardTotalSteps
+    Show-StepHeader -StepNumber 5 -StepTitle "Git Configuration" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Configure your Git identity for commits."
     Write-SpectreHost "[dim]This sets your default name and email for all repositories.[/]"
@@ -984,7 +1097,7 @@ function Show-GitEditorStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 5 -StepTitle "Git Editor" -TotalSteps $script:WizardTotalSteps
+    Show-StepHeader -StepNumber 6 -StepTitle "Git Editor" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Select the editor Git will use for commit messages and interactive operations."
     Write-SpectreHost "[dim]This is used when you run 'git commit' without -m, or during rebases.[/]"
@@ -1122,7 +1235,7 @@ function Show-PowerShellModulesStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 6 -StepTitle "PowerShell Modules" -TotalSteps $script:WizardTotalSteps
+    Show-StepHeader -StepNumber 7 -StepTitle "PowerShell Modules" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Select PowerShell modules to enhance your terminal experience."
     Write-SpectreHost "[dim]These modules add features like Git status, directory jumping, and icons.[/]"
@@ -1149,7 +1262,7 @@ function Show-PowerShellModulesStep {
 
 #endregion
 
-#region Oh-My-Posh Theme Selection Step
+#region Prompt Theme Selection Step
 
 function Get-AvailableThemes {
     <#
@@ -1261,10 +1374,107 @@ function Get-ThemeSelection {
     return $selectedTheme.Path
 }
 
-function Show-OhMyPoshStep {
+function Get-AvailableStarshipPresets {
     <#
     .SYNOPSIS
-        Displays the Oh-My-Posh theme selection wizard step
+        Lists Starship presets, from the installed binary when possible
+    .DESCRIPTION
+        Presets are embedded in starship.exe, so `starship preset --list` needs no
+        network. When the binary is missing (the user declined the prereq install) the
+        static $script:AvailableStarshipPresets list keeps the step usable.
+    .OUTPUTS
+        String[] - preset names
+    #>
+    $presets = @()
+    if (Get-Command Get-StarshipPresetList -ErrorAction SilentlyContinue) {
+        $presets = @(Get-StarshipPresetList)
+    }
+
+    if ($presets.Count -eq 0) {
+        return $script:AvailableStarshipPresets
+    }
+
+    # Put the devkit's preferred preset first - Read-SpectreSelection highlights index 0.
+    $preferred = 'gruvbox-rainbow'
+    if ($presets -contains $preferred) {
+        return @($preferred) + ($presets | Where-Object { $_ -ne $preferred })
+    }
+    return $presets
+}
+
+function Get-StarshipSelection {
+    <#
+    .SYNOPSIS
+        Prompts for a Starship preset, an existing config to keep, or a custom .toml
+    .PARAMETER Config
+        Current configuration (mutated with StarshipMode / StarshipPreset / StarshipConfig)
+    .OUTPUTS
+        Updated configuration
+    #>
+    param(
+        [hashtable]$Config
+    )
+
+    $keepChoice = "(Keep the existing ~/.config/starship.toml)"
+    $customChoice = "(Enter a custom .toml path...)"
+
+    $presets = @(Get-AvailableStarshipPresets)
+    $choices = [System.Collections.ArrayList]::new()
+    foreach ($preset in $presets) { $choices.Add($preset) | Out-Null }
+
+    # Only offered when there IS something to keep, exactly like the statusline step.
+    if ($Config._Detection -and $Config._Detection.StarshipConfigFound) {
+        Write-SpectreHost "[yellow]You already have $($Config._Detection.StarshipConfigPath).[/]"
+        Write-SpectreHost "[dim]Keeping it leaves STARSHIP_CONFIG unset so Starship finds it on its own.[/]"
+        Write-Host ""
+        $choices.Add($keepChoice) | Out-Null
+    }
+    $choices.Add($customChoice) | Out-Null
+
+    $selected = Read-SpectreSelection -Title "Starship configuration" -Choices $choices -Color Blue
+
+    if ($selected -eq $keepChoice) {
+        $Config.PowerShell.StarshipMode = 'Keep'
+        $Config.PowerShell.StarshipPreset = ''
+        $Config.PowerShell.StarshipConfig = ''
+        Write-Host ""
+        Write-SpectreHost "[green]Keeping your existing Starship configuration.[/]"
+        return $Config
+    }
+
+    if ($selected -eq $customChoice) {
+        do {
+            $customPath = Read-SpectreText -Prompt "Enter path to a starship .toml file"
+            if (-not (Test-Path $customPath)) {
+                Write-SpectreHost "[red]File not found. Please enter a valid path.[/]"
+            }
+        } while (-not (Test-Path $customPath))
+
+        $Config.PowerShell.StarshipMode = 'Custom'
+        $Config.PowerShell.StarshipPreset = ''
+        $Config.PowerShell.StarshipConfig = $customPath
+        Write-Host ""
+        Write-SpectreHost "[green]Using $customPath[/]"
+        return $Config
+    }
+
+    $Config.PowerShell.StarshipMode = 'Fresh'
+    $Config.PowerShell.StarshipPreset = $selected
+    $Config.PowerShell.StarshipConfig = ''
+    Write-Host ""
+    Write-SpectreHost "[green]Selected preset: $selected[/]"
+    return $Config
+}
+
+function Show-PromptThemeStep {
+    <#
+    .SYNOPSIS
+        Displays the theme/preset step for whichever prompt engine was chosen in step 2
+    .DESCRIPTION
+        Whatever the engine, an Oh-My-Posh theme path is always recorded - the bundled
+        one when the user is on Starship and never picked a theme. Copying a .omp.json
+        costs nothing and keeps `devkit prompt use oh-my-posh` instant, whereas a
+        starship.toml can only be produced by the Starship binary.
     .PARAMETER Config
         Current configuration
     .PARAMETER DevkitRoot
@@ -1277,14 +1487,34 @@ function Show-OhMyPoshStep {
         [string]$DevkitRoot = ""
     )
 
-    Show-StepHeader -StepNumber 7 -StepTitle "Oh-My-Posh Theme" -TotalSteps $script:WizardTotalSteps
+    $engine = $Config.PowerShell.PromptEngine
+    if (-not $engine) { $engine = 'oh-my-posh' }
+
+    $stepTitle = if ($engine -eq 'starship') { "Starship Configuration" } else { "Oh-My-Posh Theme" }
+    Show-StepHeader -StepNumber 8 -StepTitle $stepTitle -TotalSteps $script:WizardTotalSteps
+
+    # Get available themes - needed in both branches (see the .DESCRIPTION above).
+    $themes = Get-AvailableThemes -DevkitRoot $DevkitRoot
+
+    if ($engine -eq 'starship') {
+        Write-SpectreHost "Choose the Starship preset for your prompt."
+        Write-SpectreHost "[dim]Presets are built into starship itself - no download required.[/]"
+        Write-Host ""
+
+        $Config = Get-StarshipSelection -Config $Config
+
+        # Record a theme anyway so switching back to Oh My Posh later needs no re-run.
+        if (-not $Config.PowerShell.OhMyPoshTheme) {
+            $bundled = $themes | Where-Object { $_.Source -eq 'Devkit' } | Select-Object -First 1
+            if ($bundled) { $Config.PowerShell.OhMyPoshTheme = $bundled.Path }
+        }
+
+        return $Config
+    }
 
     Write-SpectreHost "Select a theme for your terminal prompt."
     Write-SpectreHost "[dim]Oh-My-Posh provides beautiful, informative prompts with Git status and more.[/]"
     Write-Host ""
-
-    # Get available themes
-    $themes = Get-AvailableThemes -DevkitRoot $DevkitRoot
 
     if ($themes.Count -le 1) {
         Write-SpectreHost "[yellow]No themes found in devkit. You can specify a custom theme path.[/]"
@@ -1322,7 +1552,7 @@ function Show-NvimConfigStep {
         [hashtable]$Config
     )
 
-    Show-StepHeader -StepNumber 8 -StepTitle "Neovim Configuration" -TotalSteps $script:WizardTotalSteps
+    Show-StepHeader -StepNumber 9 -StepTitle "Neovim Configuration" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Install the bundled Neovim configuration (lazy.nvim + neo-tree + easy-dotnet)."
     Write-SpectreHost "[dim]Installs to `$env:LOCALAPPDATA\nvim\ - Neovim's standard Windows location.[/]"
@@ -1411,7 +1641,7 @@ function Show-ClaudeCodeStep {
         [string]$DevkitRoot = ""
     )
 
-    Show-StepHeader -StepNumber 9 -StepTitle "Claude Code, Statusline & Herdr" -TotalSteps $script:WizardTotalSteps
+    Show-StepHeader -StepNumber 10 -StepTitle "Claude Code, Statusline & Herdr" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Install Claude Code assets (agents, skills, commands, CLAUDE.md) into `$env:USERPROFILE\.claude"
     Write-SpectreHost "[dim]the herdr terminal-multiplexer configuration (settings.json hook + %APPDATA%\herdr\config.toml),[/]"
@@ -1595,8 +1825,13 @@ function Invoke-Installation {
         ConfigResults = $null
         ModuleResults = $null
         ThemePath = $null
+        StarshipConfig = ""
         Errors = @()
     }
+
+    # Pre-PromptEngine configs have no engine key; Oh My Posh stays the default.
+    $promptEngine = $Config.PowerShell.PromptEngine
+    if (-not $promptEngine) { $promptEngine = 'oh-my-posh' }
 
     Write-Host ""
 
@@ -1638,10 +1873,47 @@ function Invoke-Installation {
             }
         }
         @{
+            # Runs whatever the engine, so `devkit prompt use oh-my-posh` needs no re-run.
+            # Only a hard failure when Oh My Posh is what actually renders the prompt.
             Name = "Copying Oh-My-Posh theme"
             Action = {
-                $results.ThemePath = Copy-DevkitTheme -SourceThemePath $Config.PowerShell.OhMyPoshTheme
-                return ($null -ne $results.ThemePath -and $results.ThemePath -ne "")
+                if ($Config.PowerShell.OhMyPoshTheme) {
+                    $results.ThemePath = Copy-DevkitTheme -SourceThemePath $Config.PowerShell.OhMyPoshTheme
+                }
+                $copied = ($null -ne $results.ThemePath -and $results.ThemePath -ne "")
+                if (-not $copied -and $promptEngine -ne 'oh-my-posh') {
+                    Write-SpectreHost "  [dim](no theme selected - Starship is the prompt engine)[/]"
+                    return $true
+                }
+                return $copied
+            }
+        }
+        @{
+            Name = "Resolving Starship configuration"
+            Action = {
+                if ($promptEngine -ne 'starship') {
+                    Write-SpectreHost "  [dim](skipped - not the selected prompt engine)[/]"
+                    return $true
+                }
+
+                $mode = if ($Config.PowerShell.StarshipMode) { $Config.PowerShell.StarshipMode } else { 'Fresh' }
+                $results.StarshipConfig = Install-DevkitStarshipConfig `
+                    -Mode $mode `
+                    -Preset $Config.PowerShell.StarshipPreset `
+                    -CustomPath $Config.PowerShell.StarshipConfig
+
+                if ($mode -eq 'Keep') {
+                    Write-SpectreHost "  [dim](keeping your existing starship.toml)[/]"
+                    return $true
+                }
+
+                # A warning, not a failure: with no config written the profile still
+                # starts Starship, it just falls back to Starship's own default.
+                if (-not $results.StarshipConfig) {
+                    Write-SpectreHost "  [yellow]Could not write a Starship config; Starship will use its own default.[/]"
+                    return $false
+                }
+                return $true
             }
         }
         @{
@@ -1656,12 +1928,16 @@ function Invoke-Installation {
             }
         }
         @{
+            # NOT gated on the theme copy: a Starship user with no .omp.json still needs
+            # this file, and without it the profile sources nothing at all.
             Name = "Generating variables.ps1"
             Action = {
-                if ($results.ThemePath) {
-                    return Save-VariablesPs1 -ThemePath $results.ThemePath -SourceRoot $SourceRoot
-                }
-                return $false
+                $themeArg = if ($results.ThemePath) { $results.ThemePath } else { "" }
+                return Save-VariablesPs1 `
+                    -ThemePath $themeArg `
+                    -Engine $promptEngine `
+                    -StarshipConfigPath $results.StarshipConfig `
+                    -SourceRoot $SourceRoot
             }
         }
         @{
@@ -1855,7 +2131,7 @@ function Show-InstallationStep {
         [string]$DevkitRoot
     )
 
-    Show-StepHeader -StepNumber 11 -StepTitle "Installing" -TotalSteps $script:WizardTotalSteps
+    Show-StepHeader -StepNumber 12 -StepTitle "Installing" -TotalSteps $script:WizardTotalSteps
 
     Write-SpectreHost "Applying your configuration..."
     Write-Host ""
@@ -1915,10 +2191,27 @@ function Show-ConfigurationSummary {
     Write-SpectreHost "[blue]PowerShell Configuration:[/]"
     $modulesValue = if ($Config.PowerShell.Modules) { $Config.PowerShell.Modules -join ", " } else { "(none)" }
     $themeValue = if ($Config.PowerShell.OhMyPoshTheme) { $Config.PowerShell.OhMyPoshTheme } else { "(none)" }
+
+    $engine = $Config.PowerShell.PromptEngine
+    if (-not $engine) { $engine = 'oh-my-posh' }
+    $engineValue = if ($engine -eq 'starship') { "Starship" } else { "Oh My Posh" }
+
     $psData = @(
         [PSCustomObject]@{ Setting = "Modules"; Value = $modulesValue }
-        [PSCustomObject]@{ Setting = "Oh-My-Posh Theme"; Value = $themeValue }
+        [PSCustomObject]@{ Setting = "Prompt Engine"; Value = $engineValue }
     )
+
+    if ($engine -eq 'starship') {
+        $starshipValue = switch ($Config.PowerShell.StarshipMode) {
+            'Keep'   { "Keep existing ~/.config/starship.toml" }
+            'Custom' { "Custom: $($Config.PowerShell.StarshipConfig)" }
+            default  { "Preset: $($Config.PowerShell.StarshipPreset)" }
+        }
+        $psData += [PSCustomObject]@{ Setting = "Starship Config"; Value = $starshipValue }
+        $psData += [PSCustomObject]@{ Setting = "Oh-My-Posh Theme"; Value = "$themeValue (kept ready to switch back)" }
+    } else {
+        $psData += [PSCustomObject]@{ Setting = "Oh-My-Posh Theme"; Value = $themeValue }
+    }
     $psData | Format-SpectreTable -Border Rounded -Color Blue | Out-Host
 
     # Neovim Configuration
@@ -2046,33 +2339,37 @@ function Start-Wizard {
     Write-SpectreHost "[green]Selected mode: $($script:WizardState.Mode)[/]"
     Write-Host ""
 
-    # Step 2: Prerequisites. Runs FIRST among the content steps and installs
-    # immediately, so the Git-editor and Oh-My-Posh steps below can see new tools.
+    # Step 2: Prompt engine. Must precede Prerequisites - that step is what installs
+    # starship.exe, and the theme step below asks the binary for its preset list.
+    $script:WizardState.Config = Show-PromptEngineStep -Config $script:WizardState.Config
+
+    # Step 3: Prerequisites. Runs FIRST among the installing steps and installs
+    # immediately, so the Git-editor and prompt-theme steps below can see new tools.
     $script:WizardState.Config = Show-PrerequisitesStep -Config $script:WizardState.Config
 
-    # Step 3: Repository Locations
+    # Step 4: Repository Locations
     $script:WizardState.Config = Show-RepoLocationsStep -Config $script:WizardState.Config
 
-    # Step 4: Git Configuration
+    # Step 5: Git Configuration
     $script:WizardState.Config = Show-GitConfigStep -Config $script:WizardState.Config
 
-    # Step 5: Git Editor
+    # Step 6: Git Editor
     $script:WizardState.Config = Show-GitEditorStep -Config $script:WizardState.Config
 
-    # Step 6: PowerShell Modules
+    # Step 7: PowerShell Modules
     $script:WizardState.Config = Show-PowerShellModulesStep -Config $script:WizardState.Config
 
-    # Step 7: Oh-My-Posh Theme
-    $script:WizardState.Config = Show-OhMyPoshStep -Config $script:WizardState.Config -DevkitRoot $DevkitRoot
+    # Step 8: Prompt theme (Oh-My-Posh theme or Starship preset)
+    $script:WizardState.Config = Show-PromptThemeStep -Config $script:WizardState.Config -DevkitRoot $DevkitRoot
 
-    # Step 8: Neovim Configuration
+    # Step 9: Neovim Configuration
     $script:WizardState.Config = Show-NvimConfigStep -Config $script:WizardState.Config
 
-    # Step 9: Claude Code, Statusline & Herdr
+    # Step 10: Claude Code, Statusline & Herdr
     $script:WizardState.Config = Show-ClaudeCodeStep -Config $script:WizardState.Config -DevkitRoot $DevkitRoot
 
     # Confirmation step
-    Show-StepHeader -StepNumber 10 -StepTitle "Review Configuration" -TotalSteps $script:WizardTotalSteps
+    Show-StepHeader -StepNumber 11 -StepTitle "Review Configuration" -TotalSteps $script:WizardTotalSteps
 
     # Use fully collected config
     # NOTE: this is a hand-copied projection, not the whole config. A new top-level

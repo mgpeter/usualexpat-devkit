@@ -98,12 +98,28 @@ Execute-Step -stepName "Importing Terminal-Icons..." -action {
     }
 }
 
-Execute-Step -stepName "Loading Oh My Posh configuration and theme..." -action {
-    $ohMyPoshConfig = $env:DEVKIT_OMP_THEME
-    if ($ohMyPoshConfig -and (Test-Path $ohMyPoshConfig)) {
-        oh-my-posh init pwsh --config "$ohMyPoshConfig" | Invoke-Expression
-    } else {
-        Write-Host "Oh-My-Posh theme not found at: $ohMyPoshConfig" -ForegroundColor Yellow
+Execute-Step -stepName "Loading prompt engine..." -action {
+    # The 'default' arm - not an explicit 'oh-my-posh' case - is what keeps a variables.ps1
+    # written before DEVKIT_PROMPT_ENGINE existed rendering the same prompt as before.
+    switch ($env:DEVKIT_PROMPT_ENGINE) {
+        'starship' {
+            if (-not (Get-Command starship -ErrorAction SilentlyContinue)) {
+                Write-Host "starship not found on PATH. Run: devkit prereqs install" -ForegroundColor Yellow
+                return
+            }
+            if ($env:DEVKIT_STARSHIP_CONFIG -and (Test-Path $env:DEVKIT_STARSHIP_CONFIG)) {
+                $env:STARSHIP_CONFIG = $env:DEVKIT_STARSHIP_CONFIG
+            }
+            Invoke-Expression (&starship init powershell)
+        }
+        default {
+            $ohMyPoshConfig = $env:DEVKIT_OMP_THEME
+            if ($ohMyPoshConfig -and (Test-Path $ohMyPoshConfig)) {
+                oh-my-posh init pwsh --config "$ohMyPoshConfig" | Invoke-Expression
+            } else {
+                Write-Host "Oh-My-Posh theme not found at: $ohMyPoshConfig" -ForegroundColor Yellow
+            }
+        }
     }
 }
 
