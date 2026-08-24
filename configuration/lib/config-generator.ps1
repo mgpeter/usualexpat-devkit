@@ -631,6 +631,424 @@ function Get-DevkitStarshipConfigPath {
     return Join-Path (Join-Path (Get-DevkitUserRoot) "themes") "starship.toml"
 }
 
+#region Starship git panel
+
+# Starship gives each module exactly one style, so `git_branch` cannot change colour
+# with what the repo is doing. The panel works around that: `git_branch` is disabled and
+# four `env_var` modules take its slot in the format string, one per state. An env_var
+# module renders only when its variable is set, and Invoke-Starship-PreCommand in the
+# profile sets exactly one of them per prompt - so exactly one branch segment appears.
+#
+# The alternative - four `custom` modules with mutually exclusive `when` conditions - is
+# what the Starship docs suggest and is wrong on Windows: every `when` spawns its own
+# shell, so it costs four pwsh launches per prompt instead of one `git status`.
+$script:DevkitStarshipPanelStates = [ordered]@{
+    'DEVKIT_GIT_CONFLICT' = 'red'
+    'DEVKIT_GIT_DIRTY'    = 'yellow'
+    'DEVKIT_GIT_DIVERGED' = 'purple'
+    'DEVKIT_GIT_CLEAN'    = 'green'
+}
+
+$script:DevkitStarshipPanelBegin = '# --- devkit git panel BEGIN (managed: devkit prompt gitpanel) ---'
+$script:DevkitStarshipPanelEnd   = '# --- devkit git panel END ---'
+
+# `gitpanel off` has to hand back the preset the user actually chose, and the panel
+# overwrites [git_branch] / [git_status] to get there. The originals are archived inside
+# the panel block behind this prefix so removal can put them back verbatim.
+$script:DevkitStarshipArchiveMark = '#!devkit-orig!'
+
+function Split-StarshipToml {
+    <#
+    .SYNOPSIS
+        Splits a starship.toml into its preamble and its [section] blocks
+    .DESCRIPTION
+        Section headers are only recognised outside triple-quoted strings. That matters:
+        every powerline preset writes its top-level format as a """ block whose lines
+        start with things like [](fg:color_aqua), which a naive line scan reads as a
+        section header and truncates the format at.
+    .PARAMETER Text
+        Full text of a starship.toml
+    .OUTPUTS
+        Hashtable - Preamble (string) and Sections (array of @{ Name; Text })
+    #>
+    param([string]$Text)
+
+    $lines = $Text -split "`r?`n"
+    $preamble = [System.Collections.Generic.List[string]]::new()
+    $sections = [System.Collections.Generic.List[object]]::new()
+    $current = $null
+    $inTriple = ''
+
+    foreach ($line in $lines) {
+        if (-not $inTriple -and $line -match '^\s*\[\[?([A-Za-z0-9_\-\."'']+)\]\]?\s*(#.*)?$') {
+            $current = @{ Name = $Matches[1].Trim('"', "'"); Lines = [System.Collections.Generic.List[string]]::new() }
+            $current.Lines.Add($line)
+            $sections.Add($current)
+        } elseif ($current) {
+            $current.Lines.Add($line)
+        } else {
+            $preamble.Add($line)
+        }
+
+        # Track triple-quote state left to right; a line may open and close one.
+        $idx = 0
+        while ($idx -lt $line.Length) {
+            if ($inTriple) {
+                $j = $line.IndexOf($inTriple, $idx)
+                if ($j -lt 0) { break }
+                $idx = $j + 3
+                $inTriple = ''
+            } else {
+                $d1 = $line.IndexOf('"""', $idx)
+                $d2 = $line.IndexOf("'''", $idx)
+                $j = if ($d1 -lt 0) { $d2 } elseif ($d2 -lt 0) { $d1 } else { [Math]::Min($d1, $d2) }
+                if ($j -lt 0) { break }
+                $inTriple = $line.Substring($j, 3)
+                $idx = $j + 3
+            }
+        }
+    }
+
+    return @{
+        Preamble = ($preamble -join "`n")
+        Sections = @($sections | ForEach-Object { @{ Name = $_.Name; Text = ($_.Lines -join "`n") } })
+    }
+}
+
+function Get-StarshipStyleBackground {
+    <#
+    .SYNOPSIS
+        Extracts the first bg: token from a starship.toml section
+    .DESCRIPTION
+        Powerline presets carry the segment background on both `style` and the inner
+        (fg:x bg:y) of their format. Reusing it is what keeps the panel from punching a
+        transparent hole in the middle of the prompt.
+    .OUTPUTS
+        String - e.g. "bg:color_aqua", or "" when the preset uses no background
+    #>
+    param([string]$SectionText)
+
+    $match = [regex]::Match($SectionText, 'bg:([A-Za-z0-9_#\-]+)')
+    if ($match.Success) { return "bg:$($match.Groups[1].Value)" }
+    return ''
+}
+
+function Get-StarshipSectionValue {
+    <#
+    .SYNOPSIS
+        Reads one quoted scalar key out of a starship.toml section
+    .OUTPUTS
+        String - the value, or "" when the key is absent
+    #>
+    param([string]$SectionText, [string]$Key)
+
+    # Group 1 is the opening quote and group 2 the value, so the backreference that closes
+    # the literal is \1. Pointing it at \2 matches the value against itself, always fails,
+    # and silently costs the panel its branch glyph.
+    $pattern = "(?m)^\s*$([regex]::Escape($Key))\s*=\s*([`"'])(.*?)\1\s*(#.*)?$"
+    $match = [regex]::Match($SectionText, $pattern)
+    if ($match.Success) { return $match.Groups[2].Value }
+    return ''
+}
+
+function Test-DevkitStarshipGitPanel {
+    <#
+    .SYNOPSIS
+        True when the given starship.toml already carries the devkit git panel
+    #>
+    param([string]$Path)
+
+    if (-not $Path -or -not (Test-Path $Path)) { return $false }
+    try {
+        return ((Get-Content -LiteralPath $Path -Raw) -like "*$($script:DevkitStarshipPanelBegin)*")
+    } catch {
+        return $false
+    }
+}
+
+function New-DevkitStarshipPanelBlock {
+    <#
+    .SYNOPSIS
+        Renders the devkit git panel block for one starship.toml
+    .PARAMETER Symbol
+        Branch symbol lifted from the preset's [git_branch], so the panel keeps its glyph
+    .PARAMETER Background
+        bg: token lifted from the preset, or "" for presets that use no background
+    .PARAMETER Archive
+        Original [git_branch] / [git_status] text, stored commented out so `gitpanel off`
+        can restore the preset rather than leaving it degraded
+    .OUTPUTS
+        String - the block, marker to marker
+    #>
+    param(
+        [string]$Symbol = '',
+        [string]$Background = '',
+        [string]$Archive = ''
+    )
+
+    $bgSuffix = if ($Background) { " $Background" } else { '' }
+    $lines = [System.Collections.Generic.List[string]]::new()
+
+    $lines.Add($script:DevkitStarshipPanelBegin)
+    $lines.Add('# git_branch cannot change colour per repo state, so it is disabled and four')
+    $lines.Add('# env_var modules stand in for it. Invoke-Starship-PreCommand in the devkit')
+    $lines.Add('# profile sets exactly one of DEVKIT_GIT_CONFLICT/DIRTY/DIVERGED/CLEAN per')
+    $lines.Add('# prompt; without it no branch renders at all.')
+    $lines.Add('#   red = conflict or rebase/merge in progress   yellow = local changes')
+    $lines.Add('#   purple = ahead of or behind upstream         green = clean')
+    $lines.Add('# Regenerate with: devkit prompt gitpanel on     Undo with: gitpanel off')
+
+    if ($Archive) {
+        $lines.Add('')
+        $lines.Add('# Preset sections this panel replaced, kept verbatim for `gitpanel off`:')
+        foreach ($archLine in ($Archive -split "`r?`n")) {
+            $lines.Add("$($script:DevkitStarshipArchiveMark)$archLine")
+        }
+    }
+
+    $lines.Add('')
+    $lines.Add('[git_branch]')
+    $lines.Add('disabled = true')
+
+    foreach ($varName in $script:DevkitStarshipPanelStates.Keys) {
+        $colour = $script:DevkitStarshipPanelStates[$varName]
+        $lines.Add('')
+        $lines.Add("[env_var.$varName]")
+        if ($Symbol) { $lines.Add("symbol = `"$Symbol`"") }
+        $lines.Add("style = `"bold fg:$colour$bgSuffix`"")
+        if ($Background) {
+            $lines.Add('format = "[ $symbol$env_value ]($style)"')
+        } else {
+            $lines.Add('format = "[$symbol$env_value]($style) "')
+        }
+    }
+
+    # posh-git's counts, one colour per category. ${count} is the whole point of the
+    # rewrite - the presets ship these as bare symbols with no number attached.
+    $counts = [ordered]@{
+        conflicted = @('!', 'red')
+        untracked  = @('?', 'purple')
+        modified   = @('~', 'yellow')
+        staged     = @('+', 'green')
+        renamed    = @([string][char]0x00BB, 'cyan')
+        deleted    = @('-', 'red')
+        stashed    = @([string][char]0x2261, 'blue')
+    }
+
+    $lines.Add('')
+    $lines.Add('[git_status]')
+    $lines.Add("style = `"$(if ($Background) { $Background } else { 'cyan' })`"")
+    $lines.Add('format = "[ $conflicted$untracked$modified$staged$renamed$deleted$ahead_behind$stashed]($style)"')
+    foreach ($key in $counts.Keys) {
+        $symbol = $counts[$key][0]
+        $colour = $counts[$key][1]
+        $lines.Add("$($key.PadRight(10)) = `"[$symbol`${count}](bold fg:$colour$bgSuffix) `"")
+    }
+
+    $up   = [string][char]0x21E1
+    $down = [string][char]0x21E3
+    $both = [string][char]0x21D5
+    $lines.Add("ahead      = `"[$up`${count}](bold fg:purple$bgSuffix) `"")
+    $lines.Add("behind     = `"[$down`${count}](bold fg:purple$bgSuffix) `"")
+    $lines.Add("diverged   = `"[$both$up`${ahead_count}$down`${behind_count}](bold fg:purple$bgSuffix) `"")
+
+    $lines.Add('')
+    $lines.Add($script:DevkitStarshipPanelEnd)
+
+    return ($lines -join "`n")
+}
+
+function Update-StarshipFormatForPanel {
+    <#
+    .SYNOPSIS
+        Puts the four env_var refs where $git_branch used to be in a top-level format
+    .OUTPUTS
+        String - the rewritten preamble, or $null when the format cannot be placed
+    #>
+    param([string]$Preamble)
+
+    $refs = (($script:DevkitStarshipPanelStates.Keys | ForEach-Object { "`${env_var.$_}" }) -join '')
+
+    if ($Preamble -like '*${env_var.DEVKIT_GIT_*') {
+        return $Preamble
+    }
+
+    if ($Preamble -match '\$\{?git_branch\}?') {
+        return ([regex]::Replace($Preamble, '\$\{?git_branch\}?', $refs))
+    }
+
+    if ($Preamble -notmatch '(?m)^\s*format\s*=') {
+        # No top-level format means Starship's "$all", which orders env_var modules
+        # nowhere near the git segment. Name only the modules needed to position the
+        # branch and let $all render everything else in its usual order.
+        return ($Preamble.TrimEnd() + "`n" + "format = `"`$username`$hostname`$directory$refs`$all`"")
+    }
+
+    if ($Preamble -match '\$\{?git_status\}?') {
+        return ([regex]::Replace($Preamble, '(\$\{?git_status\}?)', "$refs`$1", 1))
+    }
+
+    Write-Warning "Starship config has a top-level format with no git segment; the git panel was not applied."
+    return $null
+}
+
+function Remove-DevkitStarshipPanelText {
+    <#
+    .SYNOPSIS
+        Reverses Add-DevkitStarshipGitPanel on a config's text
+    .DESCRIPTION
+        Restores the archived [git_branch] / [git_status], puts $git_branch back in the
+        format, and drops the block. A config that never had a panel comes back unchanged.
+    .OUTPUTS
+        String - the restored text
+    #>
+    param([string]$Text)
+
+    $beginIdx = $Text.IndexOf($script:DevkitStarshipPanelBegin)
+    if ($beginIdx -lt 0) { return $Text }
+
+    $endIdx = $Text.IndexOf($script:DevkitStarshipPanelEnd, $beginIdx)
+    $blockEnd = if ($endIdx -lt 0) { $Text.Length } else { $endIdx + $script:DevkitStarshipPanelEnd.Length }
+    $block = $Text.Substring($beginIdx, $blockEnd - $beginIdx)
+    $rest = ($Text.Substring(0, $beginIdx).TrimEnd() + "`n" + $Text.Substring($blockEnd)).TrimEnd()
+
+    $archive = @()
+    foreach ($line in ($block -split "`r?`n")) {
+        if ($line.StartsWith($script:DevkitStarshipArchiveMark)) {
+            $archive += $line.Substring($script:DevkitStarshipArchiveMark.Length)
+        }
+    }
+
+    $refs = (($script:DevkitStarshipPanelStates.Keys | ForEach-Object { "`${env_var.$_}" }) -join '')
+    if ($rest.Contains($refs)) {
+        $rest = $rest.Replace($refs, '$git_branch')
+    }
+
+    # The synthesised format is ours alone; leaving it behind would pin a config that
+    # had no top-level format to today's module list.
+    $rest = (($rest -split "`r?`n") | Where-Object {
+        $_ -notmatch '^\s*format\s*=\s*"\$username\$hostname\$directory\$git_branch\$all"\s*$'
+    }) -join "`n"
+
+    if ($archive.Count -gt 0) {
+        $rest = $rest.TrimEnd() + "`n`n" + (($archive -join "`n").Trim("`n"))
+    }
+
+    return ($rest.TrimEnd() + "`n")
+}
+
+function Add-DevkitStarshipGitPanel {
+    <#
+    .SYNOPSIS
+        Rewrites a starship.toml so the branch is coloured by repo state and git_status
+        reports posh-git style counts
+    .DESCRIPTION
+        Three edits, all of which have to happen together or the prompt loses its branch:
+          1. [git_branch] and [git_status] are REPLACED, not appended to. TOML rejects a
+             duplicate table outright and Starship then falls back to its default config,
+             so the preset's own sections have to go. They are archived inside the block.
+          2. $git_branch in the top-level format is swapped for the four env_var refs.
+             A config with no top-level format is on Starship's $all, where env_var sits
+             far from the git segment - so one is written naming only enough modules to
+             put the branch back in the right place, leaving $all to order the rest.
+          3. The panel block is appended.
+
+        MUST NEVER THROW - same contract as Install-DevkitStarshipConfig, whose result
+        this decorates. A failure here degrades to a warning and an unpanelled prompt.
+    .PARAMETER Path
+        The starship.toml to rewrite, in place
+    .OUTPUTS
+        Boolean - True when the panel is present afterwards
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        if (-not (Test-Path $Path)) {
+            Write-Warning "Starship config not found: $Path"
+            return $false
+        }
+
+        $text = Get-Content -LiteralPath $Path -Raw
+        if (Test-DevkitStarshipGitPanel -Path $Path) {
+            # Re-applying: drop the old panel and restore the archive first, so the symbol
+            # and background are read off the preset rather than off our own last output.
+            $text = Remove-DevkitStarshipPanelText -Text $text
+        }
+
+        $parsed = Split-StarshipToml -Text $text
+        $branchSection = @($parsed.Sections | Where-Object { $_.Name -eq 'git_branch' })[0]
+        $statusSection = @($parsed.Sections | Where-Object { $_.Name -eq 'git_status' })[0]
+
+        $symbol = if ($branchSection) {
+            Get-StarshipSectionValue -SectionText $branchSection.Text -Key 'symbol'
+        } else {
+            [string][char]0xE0A0
+        }
+        # Presets write the glyph bare and put the gap in their format; Starship's own
+        # default carries a trailing space. Normalise both so the panel format can stay
+        # a plain "$symbol$env_value".
+        if ($symbol) { $symbol = $symbol.TrimEnd() + ' ' }
+
+        $background = ''
+        foreach ($candidate in @($branchSection, $statusSection)) {
+            if ($candidate -and -not $background) {
+                $background = Get-StarshipStyleBackground -SectionText $candidate.Text
+            }
+        }
+
+        $archiveParts = @()
+        foreach ($candidate in @($branchSection, $statusSection)) {
+            if ($candidate) { $archiveParts += $candidate.Text.Trim("`n") }
+        }
+
+        $kept = @($parsed.Sections | Where-Object {
+            $_.Name -ne 'git_branch' -and $_.Name -ne 'git_status' -and $_.Name -notlike 'env_var.DEVKIT_GIT_*'
+        })
+
+        $preamble = Update-StarshipFormatForPanel -Preamble $parsed.Preamble
+        if ($null -eq $preamble) { return $false }
+
+        $rebuilt = @($preamble.Trim("`n")) + @($kept | ForEach-Object { $_.Text.Trim("`n") })
+        $panel = New-DevkitStarshipPanelBlock -Symbol $symbol -Background $background `
+            -Archive ($archiveParts -join "`n")
+        $final = ((@($rebuilt | Where-Object { $_.Trim() }) -join "`n`n").TrimEnd() + "`n`n" + $panel + "`n")
+
+        # No BOM: Starship's TOML parser reads the byte order mark as part of the first key.
+        [System.IO.File]::WriteAllText($Path, $final, (New-Object System.Text.UTF8Encoding($false)))
+        return $true
+    } catch {
+        Write-Warning "Failed to apply the Starship git panel: $_"
+        return $false
+    }
+}
+
+function Remove-DevkitStarshipGitPanel {
+    <#
+    .SYNOPSIS
+        Removes the devkit git panel from a starship.toml, restoring the preset sections
+    .OUTPUTS
+        Boolean - True when the file no longer carries a panel
+    #>
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        if (-not (Test-Path $Path)) {
+            Write-Warning "Starship config not found: $Path"
+            return $false
+        }
+        if (-not (Test-DevkitStarshipGitPanel -Path $Path)) { return $true }
+
+        $restored = Remove-DevkitStarshipPanelText -Text (Get-Content -LiteralPath $Path -Raw)
+        [System.IO.File]::WriteAllText($Path, $restored, (New-Object System.Text.UTF8Encoding($false)))
+        return $true
+    } catch {
+        Write-Warning "Failed to remove the Starship git panel: $_"
+        return $false
+    }
+}
+
+#endregion
+
 function Install-DevkitStarshipConfig {
     <#
     .SYNOPSIS
@@ -651,6 +1069,9 @@ function Install-DevkitStarshipConfig {
         Preset name for Fresh mode
     .PARAMETER CustomPath
         Source .toml for Custom mode
+    .PARAMETER GitPanel
+        Apply the devkit git panel to the resolved config. Keep mode cannot honour this -
+        the config is wherever Starship finds it and the devkit does not own that file.
     .OUTPUTS
         String - path to the devkit-managed config, or "" when none should be recorded
     #>
@@ -660,7 +1081,9 @@ function Install-DevkitStarshipConfig {
 
         [string]$Preset = '',
 
-        [string]$CustomPath = ''
+        [string]$CustomPath = '',
+
+        [bool]$GitPanel = $true
     )
 
     try {
@@ -685,6 +1108,7 @@ function Install-DevkitStarshipConfig {
                 return ""
             }
             Copy-Item -Path $CustomPath -Destination $destPath -Force
+            if ($GitPanel) { Add-DevkitStarshipGitPanel -Path $destPath | Out-Null }
             return $destPath
         }
 
@@ -693,6 +1117,9 @@ function Install-DevkitStarshipConfig {
 
         # Detection decides success, not the exit code - same rule as Install-Prerequisites.
         if (Test-Path $destPath) {
+            # Never fatal: a config without the panel is still a working prompt, so the
+            # warning Add-DevkitStarshipGitPanel emits is the whole failure handling.
+            if ($GitPanel) { Add-DevkitStarshipGitPanel -Path $destPath | Out-Null }
             return $destPath
         }
 
@@ -720,6 +1147,10 @@ function New-VariablesPs1 {
     .PARAMETER StarshipConfigPath
         Path to the devkit-managed starship.toml. Empty means "let Starship find its own",
         and the DEVKIT_STARSHIP_CONFIG line is omitted entirely.
+    .PARAMETER GitPanel
+        True when the Starship config carries the devkit git panel. This is what gates
+        Invoke-Starship-PreCommand in the profile: the classifier costs a `git status`
+        per prompt and buys nothing when no env_var module is there to read it.
     .PARAMETER SourceRoot
         Optional path to the source devkit repo (recorded as DEVKIT_REPO_ROOT)
     .OUTPUTS
@@ -732,6 +1163,8 @@ function New-VariablesPs1 {
         [string]$Engine = 'oh-my-posh',
 
         [string]$StarshipConfigPath = "",
+
+        [bool]$GitPanel = $false,
 
         [string]$SourceRoot = ""
     )
@@ -751,6 +1184,13 @@ function New-VariablesPs1 {
         $starshipLine = "`$env:DEVKIT_STARSHIP_CONFIG = `"$normalizedStarship`"`n"
     }
 
+    # Absent, not "0", when off - the profile's guard is a truthiness test and an empty
+    # env var and a missing one behave the same there.
+    $panelLine = ""
+    if ($GitPanel) {
+        $panelLine = "`$env:DEVKIT_GIT_PANEL = `"1`"`n"
+    }
+
     $repoLine = ""
     if ($SourceRoot) {
         $repoPath = $SourceRoot -replace '\\', '/'
@@ -763,7 +1203,7 @@ function New-VariablesPs1 {
 
 `$env:DEVKIT_ROOT = "`$HOME/.devkit"
 `$env:DEVKIT_PROMPT_ENGINE = "$Engine"
-$themeLine$starshipLine$repoLine
+$themeLine$starshipLine$panelLine$repoLine
 "@
 }
 
@@ -777,6 +1217,8 @@ function Save-VariablesPs1 {
         Prompt engine the profile should initialise: oh-my-posh (default) or starship
     .PARAMETER StarshipConfigPath
         Path to the devkit-managed starship.toml, or "" for Starship's own default
+    .PARAMETER GitPanel
+        True when the Starship config carries the devkit git panel
     .PARAMETER SourceRoot
         Optional path to the source devkit repo (recorded as DEVKIT_REPO_ROOT)
     .OUTPUTS
@@ -790,6 +1232,8 @@ function Save-VariablesPs1 {
 
         [string]$StarshipConfigPath = "",
 
+        [bool]$GitPanel = $false,
+
         [string]$SourceRoot = ""
     )
 
@@ -798,7 +1242,7 @@ function Save-VariablesPs1 {
 
     try {
         $content = New-VariablesPs1 -ThemePath $ThemePath -Engine $Engine `
-            -StarshipConfigPath $StarshipConfigPath -SourceRoot $SourceRoot
+            -StarshipConfigPath $StarshipConfigPath -GitPanel $GitPanel -SourceRoot $SourceRoot
 
         # Ensure directory exists
         if (-not (Test-Path $userRoot)) {
@@ -1157,6 +1601,12 @@ function Invoke-StarshipPresetExport {
         network, but starship must be on disk. Resolved through Test-CommandAvailable so a
         copy installed moments ago at its well-known path is used even when PATH is stale.
 
+        --force is not optional. Without it starship REFUSES to overwrite an existing file
+        and exits 1, and because detection decides success here the caller then finds the
+        old config still on disk and reports the export as having worked - so every
+        `devkit prompt preset <name>` after the first silently keeps the previous preset.
+        The destination is backed up by Install-DevkitStarshipConfig before this runs.
+
         Called by name so test-prompt-engine.ps1 can shadow it.
     .PARAMETER PresetName
         Preset to export (e.g. "gruvbox-rainbow")
@@ -1176,10 +1626,10 @@ function Invoke-StarshipPresetExport {
     $starship = Get-StarshipPath
 
     if (-not $starship.Found) {
-        return @{ Success = $false; ExitCode = -1; Output = 'starship not found'; Command = "starship preset $PresetName -o $DestinationPath" }
+        return @{ Success = $false; ExitCode = -1; Output = 'starship not found'; Command = "starship preset $PresetName -o $DestinationPath --force" }
     }
 
-    return Invoke-NativeCapture -Executable $starship.Path -Arguments @('preset', $PresetName, '-o', $DestinationPath)
+    return Invoke-NativeCapture -Executable $starship.Path -Arguments @('preset', $PresetName, '-o', $DestinationPath, '--force')
 }
 
 function Update-SessionPath {
@@ -1440,6 +1890,7 @@ function Invoke-ConfigGeneration {
         ProfileCopied = ""
         ThemeCopied = ""
         StarshipConfig = ""
+        StarshipGitPanel = $false
         GitConfig = $false
         ProfileConfigs = @()
         Variables = $false
@@ -1499,7 +1950,13 @@ function Invoke-ConfigGeneration {
             $results.StarshipConfig = Install-DevkitStarshipConfig `
                 -Mode $(if ($Config.PowerShell.StarshipMode) { $Config.PowerShell.StarshipMode } else { 'Fresh' }) `
                 -Preset $Config.PowerShell.StarshipPreset `
-                -CustomPath $Config.PowerShell.StarshipConfig
+                -CustomPath $Config.PowerShell.StarshipConfig `
+                -GitPanel ([bool]$Config.PowerShell.StarshipGitPanel)
+
+            # Recorded from the file, not from the request: Add-DevkitStarshipGitPanel
+            # warns and returns false on a format it cannot place the branch into, and
+            # the profile must not then pay for a classifier nothing reads.
+            $results.StarshipGitPanel = Test-DevkitStarshipGitPanel -Path $results.StarshipConfig
         }
     } catch {
         $results.Errors += "StarshipConfig: $_"
@@ -1513,6 +1970,7 @@ function Invoke-ConfigGeneration {
             -ThemePath $results.ThemeCopied `
             -Engine $engine `
             -StarshipConfigPath $results.StarshipConfig `
+            -GitPanel $results.StarshipGitPanel `
             -SourceRoot $SourceRoot
     } catch {
         $results.Errors += "Variables: $_"
@@ -2259,6 +2717,10 @@ function Remove-ClaudeStatusLine {
 # Prompt engines:
 # - Get-StarshipPath, Get-StarshipPresetList, Invoke-StarshipPresetExport
 # - Get-DevkitStarshipConfigPath, Install-DevkitStarshipConfig
+# Starship git panel:
+# - Split-StarshipToml, Get-StarshipStyleBackground, Get-StarshipSectionValue
+# - New-DevkitStarshipPanelBlock, Update-StarshipFormatForPanel, Remove-DevkitStarshipPanelText
+# - Add-DevkitStarshipGitPanel, Remove-DevkitStarshipGitPanel, Test-DevkitStarshipGitPanel
 # Claude Code & Herdr:
 # - Get-ClaudeUserRoot, Get-HerdrConfigRoot
 # - Copy-DevkitClaudeAgents, Copy-DevkitClaudeSkills, Copy-DevkitClaudeCommands, Copy-DevkitClaudeMd

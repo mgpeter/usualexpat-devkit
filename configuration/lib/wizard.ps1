@@ -32,6 +32,7 @@ $script:WizardState = @{
             StarshipConfig = ""
             StarshipPreset = ""
             StarshipMode = "Fresh"
+            StarshipGitPanel = $true
         }
     }
 }
@@ -187,6 +188,7 @@ function Show-PromptEngineStep {
     if (-not $Config.PowerShell.ContainsKey('StarshipConfig')) { $Config.PowerShell.StarshipConfig = '' }
     if (-not $Config.PowerShell.ContainsKey('StarshipPreset')) { $Config.PowerShell.StarshipPreset = '' }
     if (-not $Config.PowerShell.ContainsKey('StarshipMode')) { $Config.PowerShell.StarshipMode = 'Fresh' }
+    if (-not $Config.PowerShell.ContainsKey('StarshipGitPanel')) { $Config.PowerShell.StarshipGitPanel = $true }
 
     Write-SpectreHost "Choose what renders your PowerShell prompt."
     Write-SpectreHost "[dim]Both write their config to ~/.devkit/, so 'devkit prompt use <engine>' switches[/]"
@@ -1503,6 +1505,22 @@ function Show-PromptThemeStep {
 
         $Config = Get-StarshipSelection -Config $Config
 
+        # Only offered for configs the devkit owns. Keep mode points at the user's own
+        # ~/.config/starship.toml, and rewriting a file the devkit did not create is not
+        # something to do behind a yes/no in a wizard.
+        if ($Config.PowerShell.StarshipMode -ne 'Keep') {
+            Write-Host ""
+            Write-SpectreHost "The git panel colours the branch by what the repo is doing"
+            Write-SpectreHost "[dim]  [green]green[/] clean   [yellow]yellow[/] local changes   [purple]purple[/] ahead/behind   [red]red[/] conflict or rebase[/]"
+            Write-SpectreHost "[dim]and adds posh-git style counts (+2 staged, ~1 modified, ?3 untracked).[/]"
+            Write-SpectreHost "[dim]Costs one git status per prompt inside a repo; nothing outside one.[/]"
+            Write-Host ""
+            $Config.PowerShell.StarshipGitPanel = Read-SpectreConfirm `
+                -Prompt "Enable the git panel?" -DefaultAnswer "y"
+        } else {
+            $Config.PowerShell.StarshipGitPanel = $false
+        }
+
         # Record a theme anyway so switching back to Oh My Posh later needs no re-run.
         if (-not $Config.PowerShell.OhMyPoshTheme) {
             $bundled = $themes | Where-Object { $_.Source -eq 'Devkit' } | Select-Object -First 1
@@ -2208,6 +2226,14 @@ function Show-ConfigurationSummary {
             default  { "Preset: $($Config.PowerShell.StarshipPreset)" }
         }
         $psData += [PSCustomObject]@{ Setting = "Starship Config"; Value = $starshipValue }
+        $panelValue = if ($Config.PowerShell.StarshipGitPanel) {
+            "Yes (branch coloured by repo state + change counts)"
+        } elseif ($Config.PowerShell.StarshipMode -eq 'Keep') {
+            "No (not applied to a config the devkit does not own)"
+        } else {
+            "No"
+        }
+        $psData += [PSCustomObject]@{ Setting = "Git Panel"; Value = $panelValue }
         $psData += [PSCustomObject]@{ Setting = "Oh-My-Posh Theme"; Value = "$themeValue (kept ready to switch back)" }
     } else {
         $psData += [PSCustomObject]@{ Setting = "Oh-My-Posh Theme"; Value = $themeValue }

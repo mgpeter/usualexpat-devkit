@@ -98,6 +98,112 @@ Execute-Step -stepName "Importing Terminal-Icons..." -action {
     }
 }
 
+function Enable-DevkitStarshipGitPanel {
+    <#
+    .SYNOPSIS
+        Installs the per-prompt git classifier the devkit Starship git panel reads
+    .DESCRIPTION
+        Starship gives each module one fixed style, so git_branch cannot change colour with
+        what the repo is doing. The devkit panel in starship.toml disables git_branch and
+        puts four env_var modules in its slot, one per state; this classifier sets exactly
+        one of them per prompt, so exactly one branch segment renders.
+
+        Invoke-Starship-PreCommand is Starship's own hook and the only safe seam here. It
+        runs inside starship's prompt function AFTER that function has captured $? and
+        $LASTEXITCODE and BEFORE it restores them, so calling git from it cannot corrupt
+        the error indicator. Wrapping `prompt` by hand would.
+
+        Both functions are global on purpose: Execute-Step invokes its -action in a child
+        scope, and Starship's dynamic module resolves the hook through the global
+        function: drive.
+    #>
+    function global:Get-DevkitGitDirForPrompt {
+        # Walk up for .git rather than spawning `git rev-parse`, which costs about as much
+        # as the `git status` below and would double the classifier's price per prompt.
+        $loc = Get-Location
+        if ($loc.Provider.Name -ne 'FileSystem') { return $null }
+        $dir = $loc.ProviderPath
+        while ($dir) {
+            $candidate = Join-Path $dir '.git'
+            if (Test-Path -LiteralPath $candidate -PathType Container) { return $candidate }
+            if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+                # Worktree or submodule: ".git" is a file pointing at the real git dir.
+                $line = (Get-Content -LiteralPath $candidate -TotalCount 1).Trim()
+                if ($line -match '^gitdir:\s*(.+)$') {
+                    $target = $Matches[1]
+                    if (-not [System.IO.Path]::IsPathRooted($target)) { $target = Join-Path $dir $target }
+                    return [System.IO.Path]::GetFullPath($target)
+                }
+                return $null
+            }
+            $dir = Split-Path -Path $dir -Parent
+        }
+        return $null
+    }
+
+    function global:Invoke-Starship-PreCommand {
+        $env:DEVKIT_GIT_CONFLICT = $null
+        $env:DEVKIT_GIT_DIRTY    = $null
+        $env:DEVKIT_GIT_DIVERGED = $null
+        $env:DEVKIT_GIT_CLEAN    = $null
+
+        $eap = $ErrorActionPreference
+        $ErrorActionPreference = 'Ignore'
+        try {
+            $gitDir = Get-DevkitGitDirForPrompt
+            if (-not $gitDir) { return }
+
+            $lines = @(& git status --porcelain=v2 --branch 2>$null)
+            if ($LASTEXITCODE -ne 0) { return }
+
+            $branch = $null; $ahead = 0; $behind = 0
+            $dirty = $false; $unmerged = $false
+
+            foreach ($line in $lines) {
+                if ($line.StartsWith('# branch.head ')) {
+                    $branch = $line.Substring(14)
+                } elseif ($line.StartsWith('# branch.ab ')) {
+                    $ab = $line.Substring(12) -split ' '
+                    $ahead  = [int]$ab[0]   # +N
+                    $behind = [int]$ab[1]   # -N, already signed
+                } elseif (-not $line.StartsWith('#')) {
+                    $dirty = $true
+                    if ($line.StartsWith('u ')) { $unmerged = $true }
+                }
+            }
+
+            $inProgress = @('rebase-merge', 'rebase-apply', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG') |
+                Where-Object { Test-Path -LiteralPath (Join-Path $gitDir $_) }
+
+            if ($branch -eq '(detached)') {
+                # Mid-rebase HEAD is detached; git parks the original branch name here.
+                # Without this the prompt shows a short SHA exactly when knowing the
+                # branch matters most.
+                $headName = @('rebase-merge\head-name', 'rebase-apply\head-name') |
+                    ForEach-Object { Join-Path $gitDir $_ } |
+                    Where-Object { Test-Path -LiteralPath $_ } |
+                    Select-Object -First 1
+                $branch = if ($headName) {
+                    (Get-Content -LiteralPath $headName -TotalCount 1).Trim() -replace '^refs/heads/', ''
+                } else {
+                    & git rev-parse --short HEAD 2>$null
+                }
+            }
+            if (-not $branch) { return }
+
+            # Precedence: a repo mid-rebase is also dirty and also ahead, and the most
+            # alarming state is the one worth showing.
+            if ($unmerged -or $inProgress)      { $env:DEVKIT_GIT_CONFLICT = $branch; return }
+            if ($dirty)                         { $env:DEVKIT_GIT_DIRTY    = $branch; return }
+            if ($ahead -ne 0 -or $behind -ne 0) { $env:DEVKIT_GIT_DIVERGED = $branch; return }
+            $env:DEVKIT_GIT_CLEAN = $branch
+        } catch {
+        } finally {
+            $ErrorActionPreference = $eap
+        }
+    }
+}
+
 Execute-Step -stepName "Loading prompt engine..." -action {
     # The 'default' arm - not an explicit 'oh-my-posh' case - is what keeps a variables.ps1
     # written before DEVKIT_PROMPT_ENGINE existed rendering the same prompt as before.
@@ -110,6 +216,7 @@ Execute-Step -stepName "Loading prompt engine..." -action {
             if ($env:DEVKIT_STARSHIP_CONFIG -and (Test-Path $env:DEVKIT_STARSHIP_CONFIG)) {
                 $env:STARSHIP_CONFIG = $env:DEVKIT_STARSHIP_CONFIG
             }
+            if ($env:DEVKIT_GIT_PANEL) { Enable-DevkitStarshipGitPanel }
             Invoke-Expression (&starship init powershell)
         }
         default {

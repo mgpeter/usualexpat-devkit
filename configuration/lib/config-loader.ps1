@@ -438,6 +438,7 @@ function Get-ExistingConfiguration {
             StarshipConfig = ""
             StarshipPreset = ""
             StarshipMode = "Fresh"
+            StarshipGitPanel = $true
         }
         Nvim = @{
             Install = $false

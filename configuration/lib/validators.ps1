@@ -821,6 +821,7 @@ function New-DevkitConfig {
             StarshipConfig = ""
             StarshipPreset = ""
             StarshipMode = "Fresh"       # Fresh | Keep | Custom
+            StarshipGitPanel = $true     # branch coloured by repo state + posh-git counts
         }
         Nvim = @{
             Install = $false

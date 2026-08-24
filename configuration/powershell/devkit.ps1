@@ -57,6 +57,7 @@ $script:DevkitRegistry = @{
         @{ Name = 'Get-MailDomainInfo <domain>';  Description = 'Inspect a domain''s MX/SPF/DKIM/DMARC/autodiscover records' }
         @{ Name = 'Move-PhotosToMonthlyFolders';  Description = 'Sort photos into YYYY-MM/ folders' }
         @{ Name = 'Move-PhotosToYearFolders';     Description = 'Sort photos into YYYY/ folders' }
+        @{ Name = 'Invoke-Starship-PreCommand';   Description = 'Starship git panel: colours the branch by repo state (green clean / yellow local changes / purple diverged / red conflict). Only defined when DEVKIT_GIT_PANEL is set' }
     )
 
     NvimKeymaps = @(
@@ -117,6 +118,7 @@ $script:DevkitRegistry = @{
         @{ Name = 'devkit prompt use <engine>';     Description = 'Switch the prompt engine (oh-my-posh|starship); applies in new shells' }
         @{ Name = 'devkit prompt preset <name>';    Description = 'Export a Starship preset to ~/.devkit/themes/starship.toml' }
         @{ Name = 'devkit prompt list';             Description = 'List installed Oh-My-Posh themes and available Starship presets' }
+        @{ Name = 'devkit prompt gitpanel <on|off>';Description = 'Starship only: branch coloured by repo state + posh-git style change counts' }
         @{ Name = 'devkit prereqs check';            Description = 'Report which prerequisite tools and Nerd Font are present' }
         @{ Name = 'devkit prereqs install [name..]'; Description = 'Install missing prerequisites via winget (--all, --yes, --dry-run, --font)' }
         @{ Name = 'devkit backups list';            Description = 'List ~/.devkit/backups/' }
@@ -506,6 +508,25 @@ function Invoke-DevkitDoctor {
             _Devkit-CheckResult OK 'Starship config resolves' -Detail (Split-Path $env:DEVKIT_STARSHIP_CONFIG -Leaf)
         } else {
             _Devkit-CheckResult FAIL 'Starship config path broken' -Detail $env:DEVKIT_STARSHIP_CONFIG -Hint 'Run: devkit prompt preset gruvbox-rainbow'
+        }
+
+        # 6b. The git panel is two halves that have to agree. The panel disables
+        # git_branch and puts four env_var modules in its slot, and only
+        # Invoke-Starship-PreCommand ever sets those - so a config with the panel and a
+        # shell without the hook renders no branch at all, which is worse than either
+        # half being absent. Checked against the file, since that is what Starship reads.
+        $panelInConfig = _Devkit-TestGitPanel
+        $hookLoaded = [bool](Get-Command Invoke-Starship-PreCommand -ErrorAction SilentlyContinue)
+        if ($panelInConfig -and $hookLoaded) {
+            _Devkit-CheckResult OK 'Starship git panel' -Detail 'config + prompt hook both present'
+        } elseif ($panelInConfig) {
+            _Devkit-CheckResult FAIL 'Starship git panel has no prompt hook' `
+                -Detail 'starship.toml disables git_branch but nothing sets DEVKIT_GIT_*; no branch will render' `
+                -Hint 'Run: devkit update, then open a new shell'
+        } elseif ($hookLoaded) {
+            _Devkit-CheckResult WARN 'Starship git-panel hook runs but no module reads it' `
+                -Detail 'a git status per prompt for nothing' `
+                -Hint 'Run: devkit prompt gitpanel on   (or: devkit update)'
         }
     } else {
         if ($env:DEVKIT_OMP_THEME) {
@@ -1112,6 +1133,19 @@ function _Devkit-GetStarshipConfigPath {
     return ''
 }
 
+function _Devkit-TestGitPanel {
+    # Reads the file, not DEVKIT_GIT_PANEL: the env var only says what the profile was
+    # told at shell start, and `gitpanel on/off` takes effect in the next shell. The
+    # config on disk is what is actually true right now.
+    $cfg = _Devkit-GetStarshipConfigPath
+    if (-not $cfg -or -not (Test-Path $cfg)) { return $false }
+    try {
+        return ((Get-Content -LiteralPath $cfg -Raw) -like '*devkit git panel BEGIN*')
+    } catch {
+        return $false
+    }
+}
+
 function _Devkit-PrintPromptStatus {
     $engine = _Devkit-GetPromptEngine
     $engineName = if ($engine -eq 'starship') { 'Starship' } else { 'Oh My Posh' }
@@ -1130,6 +1164,17 @@ function _Devkit-PrintPromptStatus {
     _Devkit-WriteRow -Left 'starship' -Right $(if ($starship) { $starship.Source } else { '(not on PATH)' }) -Pad 20
     $starshipCfg = _Devkit-GetStarshipConfigPath
     _Devkit-WriteRow -Left '  config' -Right $(if ($starshipCfg) { $starshipCfg } else { '(Starship default)' }) -Pad 20
+
+    $panelOnDisk = _Devkit-TestGitPanel
+    $panelLive = [bool]$env:DEVKIT_GIT_PANEL
+    $panelDetail = if ($panelOnDisk -eq $panelLive) {
+        if ($panelOnDisk) { 'on' } else { 'off' }
+    } elseif ($panelOnDisk) {
+        'on (open a new shell)'
+    } else {
+        'off (open a new shell)'
+    }
+    _Devkit-WriteRow -Left '  git panel' -Right $panelDetail -Pad 20
 
     Write-Host ""
     Write-Host "  Switch with: devkit prompt use <oh-my-posh|starship>" -ForegroundColor DarkGray
@@ -1202,6 +1247,7 @@ function Invoke-DevkitPrompt {
                 -ThemePath (_Devkit-GetOmpThemePath) `
                 -Engine $target `
                 -StarshipConfigPath $starshipConfig `
+                -GitPanel (Test-DevkitStarshipGitPanel -Path $starshipConfig) `
                 -SourceRoot $env:DEVKIT_REPO_ROOT
 
             if (-not $saved) {
@@ -1225,7 +1271,10 @@ function Invoke-DevkitPrompt {
             if (-not $libPaths) { return }
             foreach ($lib in $libPaths) { . $lib }
 
-            $dest = Install-DevkitStarshipConfig -Mode Fresh -Preset $preset
+            # Exporting a preset overwrites the config, so the panel has to be carried
+            # over deliberately - a preset switch is not a request to lose it.
+            $keepPanel = _Devkit-TestGitPanel
+            $dest = Install-DevkitStarshipConfig -Mode Fresh -Preset $preset -GitPanel $keepPanel
             if (-not $dest) {
                 Write-Host "Failed to export the '$preset' preset." -ForegroundColor Red
                 return
@@ -1237,6 +1286,7 @@ function Invoke-DevkitPrompt {
                 -ThemePath (_Devkit-GetOmpThemePath) `
                 -Engine (_Devkit-GetPromptEngine) `
                 -StarshipConfigPath $dest `
+                -GitPanel (Test-DevkitStarshipGitPanel -Path $dest) `
                 -SourceRoot $env:DEVKIT_REPO_ROOT | Out-Null
 
             Write-Host "Wrote preset '$preset' to " -NoNewline
@@ -1246,8 +1296,70 @@ function Invoke-DevkitPrompt {
             }
         }
 
+        'gitpanel' {
+            $mode = if ($Rest -and $Rest.Count -gt 0) { $Rest[0].ToLower() } else { 'status' }
+            if ($mode -notin @('status', 'on', 'off')) {
+                Write-Warning "Usage: devkit prompt gitpanel status|on|off"
+                return
+            }
+
+            $cfg = _Devkit-GetStarshipConfigPath
+            if ($mode -eq 'status') {
+                $state = if (_Devkit-TestGitPanel) { 'on' } else { 'off' }
+                Write-Host ""
+                _Devkit-WriteRow -Left 'Starship git panel' -Right $state -Pad 22
+                _Devkit-WriteRow -Left '  config' -Right $(if ($cfg) { $cfg } else { '(Starship default - not devkit-managed)' }) -Pad 22
+                _Devkit-WriteRow -Left '  active in this shell' -Right $(if ($env:DEVKIT_GIT_PANEL) { 'yes' } else { 'no' }) -Pad 22
+                Write-Host ""
+                Write-Host "  green = clean   yellow = local changes   purple = diverged   red = conflict" -ForegroundColor DarkGray
+                Write-Host ""
+                return
+            }
+
+            # The panel edits the devkit-managed starship.toml. On Starship's own default
+            # there is no file the devkit owns, so there is nothing safe to rewrite.
+            if (-not $cfg -or -not (Test-Path $cfg)) {
+                Write-Host "ERROR: " -ForegroundColor Red -NoNewline
+                Write-Host "no devkit-managed starship.toml. Run: devkit prompt preset gruvbox-rainbow"
+                return
+            }
+
+            $libPaths = _Devkit-ResolveGenerator
+            if (-not $libPaths) { return }
+            foreach ($lib in $libPaths) { . $lib }
+
+            Backup-ConfigFile -Path $cfg -Description "starship-config" | Out-Null
+
+            $wanted = ($mode -eq 'on')
+            if ($wanted) {
+                Add-DevkitStarshipGitPanel -Path $cfg | Out-Null
+            } else {
+                Remove-DevkitStarshipGitPanel -Path $cfg | Out-Null
+            }
+
+            # Record what the file says, not what was asked for: applying the panel can
+            # decline on a format with no git segment, and the profile must not then pay
+            # for a classifier no module reads.
+            $applied = Test-DevkitStarshipGitPanel -Path $cfg
+            Save-VariablesPs1 `
+                -ThemePath (_Devkit-GetOmpThemePath) `
+                -Engine (_Devkit-GetPromptEngine) `
+                -StarshipConfigPath $cfg `
+                -GitPanel $applied `
+                -SourceRoot $env:DEVKIT_REPO_ROOT | Out-Null
+
+            if ($applied -ne $wanted) {
+                Write-Host "Git panel could not be turned $mode; see the warning above." -ForegroundColor Yellow
+                return
+            }
+
+            Write-Host "Starship git panel " -NoNewline
+            Write-Host $mode -ForegroundColor Green -NoNewline
+            Write-Host ". Open a new shell to see it."
+        }
+
         default {
-            Write-Warning "Usage: devkit prompt status|use <engine>|preset <name>|list"
+            Write-Warning "Usage: devkit prompt status|use <engine>|preset <name>|list|gitpanel <on|off>"
         }
     }
 }
@@ -1700,7 +1812,7 @@ Register-ArgumentCompleter -CommandName devkit -ScriptBlock {
                 'claude'  { $candidates = @('refresh', '--force') }
                 'herdr'   { $candidates = @('refresh') }
                 'statusline' { $candidates = @('status', 'install', 'refresh', 'size', 'remove', '--size', '--keep-script') }
-                'prompt'  { $candidates = @('status', 'use', 'preset', 'list') }
+                'prompt'  { $candidates = @('status', 'use', 'preset', 'list', 'gitpanel') }
                 'prereqs' { $candidates = @('check', 'install', '--all', '--yes', '--dry-run', '--font') }
                 'backups' { $candidates = @('list', 'restore') }
                 'fix'     { $candidates = @('terminal-icons') }
@@ -1714,6 +1826,9 @@ Register-ArgumentCompleter -CommandName devkit -ScriptBlock {
             }
             if ($tokens[1].ToLower() -eq 'statusline' -and $tokens[2].ToLower() -in @('size', '--size')) {
                 $candidates = @('xsmall', 'small', 'medium', 'large', 'xlarge')
+            }
+            if ($tokens[1].ToLower() -eq 'prompt' -and $tokens[2].ToLower() -eq 'gitpanel') {
+                $candidates = @('status', 'on', 'off')
             }
             if ($tokens[1].ToLower() -eq 'prompt' -and $tokens[2].ToLower() -eq 'use') {
                 $candidates = @('oh-my-posh', 'starship')

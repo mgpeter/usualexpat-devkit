@@ -62,6 +62,26 @@ Write-Host ""
 . "$SourceRoot\configuration\lib\config-generator.ps1"
 . "$SourceRoot\configuration\lib\config-loader.ps1"
 
+# --- Test 0: the real export seam asks starship to overwrite ----------------
+# Run BEFORE the stub below replaces Invoke-StarshipPresetExport, in a nested scope so
+# these shadows do not leak into the rest of the file. `starship preset -o` REFUSES to
+# overwrite an existing file and exits 1; since detection decides success here, the
+# caller would then find the old config still on disk and report a successful export -
+# so every `devkit prompt preset <name>` after the first silently kept the old preset.
+Write-Host "Test 0: the preset export seam passes --force" -ForegroundColor Yellow
+& {
+    function Get-StarshipPath { return @{ Found = $true; Path = 'C:\fake\starship.exe' } }
+    function Invoke-NativeCapture {
+        param($Executable, $Arguments)
+        $script:CapturedExportArgs = $Arguments
+        return @{ Success = $true; ExitCode = 0; Output = ''; Command = 'captured' }
+    }
+    Invoke-StarshipPresetExport -PresetName 'tokyo-night' -DestinationPath 'C:\x\starship.toml' | Out-Null
+}
+Assert ($script:CapturedExportArgs -contains '--force') "starship preset is invoked with --force so it can replace an existing config"
+Assert ($script:CapturedExportArgs -contains 'tokyo-night') "the preset name is passed through"
+Write-Host ""
+
 # --- Starship seam stubs ----------------------------------------------------
 # Defined AFTER the dot-source so these definitions win in this scope.
 $script:StarshipInstalled = $true
