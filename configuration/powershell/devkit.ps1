@@ -848,13 +848,9 @@ function Invoke-DevkitUpdate {
         return
     }
 
-    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')
-    if (-not $isAdmin) {
-        Write-Host "WARN: " -ForegroundColor Yellow -NoNewline
-        Write-Host "Not running as Admin. The installer needs Admin to install PowerShell modules."
-        Write-Host "      Re-run from an Admin PowerShell, or proceed at your own risk." -ForegroundColor DarkGray
-    }
-
+    # No elevation check here on purpose. The wizard is user-space throughout - modules
+    # have always installed with -Scope CurrentUser - and the only step that can want
+    # Admin is the prerequisites step, which asks once it knows what was ticked.
     Write-Host "Launching devkit installer..." -ForegroundColor Cyan
     & $installer
 }
@@ -1489,10 +1485,16 @@ function Invoke-DevkitPrereqs {
                 return
             }
 
-            # Machine-scope winget installs want elevation; say so before starting.
-            $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] 'Administrator')
-            if (-not $isAdmin) {
-                Write-Host "Not running elevated: winget may raise a UAC prompt per package." -ForegroundColor Yellow
+            # Name the packages that will actually prompt rather than warning about all
+            # of them: roughly half the catalogue installs per-user and never asks.
+            # Test-DevkitElevated / Get-ElevationSplit come from the catalogue dot-source
+            # above, so this stays in step with the wizard's own notice.
+            if (-not (Test-DevkitElevated)) {
+                $split = Get-ElevationSplit -Keys $keys -Catalog $catalog
+                if ($split.Machine.Count -gt 0) {
+                    Write-Host "Not running elevated: these install machine-wide and will raise a UAC prompt:" -ForegroundColor Yellow
+                    Write-Host "  $($split.Machine -join ', ')" -ForegroundColor Yellow
+                }
             }
 
             Write-Host "The following will be installed:" -ForegroundColor Cyan

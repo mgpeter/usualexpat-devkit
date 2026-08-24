@@ -63,6 +63,13 @@ try {
     Assert (@($catalog | Where-Object { -not $_.Name -or -not $_.InstallHint }).Count -eq 0) "every row has Name and InstallHint"
     Assert (@($catalog | Where-Object { $_.Mechanism -eq 'winget' -and -not $_.WingetId }).Count -eq 0) "every winget row has a WingetId"
 
+    # Elevation drives the "this will raise a UAC prompt" notice in the wizard step and
+    # in `devkit prereqs install`. A row with no classification would be silently
+    # reported as user-scope, which is the wrong way round to be wrong.
+    Assert (@($catalog | Where-Object { $_.Elevation -notin @('machine','user') }).Count -eq 0) "every row has a valid Elevation"
+    Assert ((@($catalog | Where-Object { $_.Elevation -eq 'machine' }).Count) -gt 0) "at least one row installs machine-wide"
+    Assert ((@($catalog | Where-Object { $_.Elevation -eq 'user' }).Count) -gt 0) "at least one row installs per-user"
+
     # Encodes the security decision: a row that downloads and runs a remote script must
     # never be emphasised for default selection.
     $remote = @($catalog | Where-Object { $_.Mechanism -eq 'remote-script' })
@@ -75,6 +82,34 @@ try {
             Assert ($keys -contains $dep) "DependsOn '$dep' on $($row.Key) names a real key"
         }
     }
+    Write-Host ""
+    #endregion
+
+    #region Test 1b: Elevation classification
+    Write-Host "=== Test 1b: Elevation classification ===" -ForegroundColor Yellow
+
+    # Test-DevkitElevated answers about the current process, so the value depends on how
+    # the suite was launched. What must hold either way is that it answers at all.
+    $elevated = Test-DevkitElevated
+    Assert ($elevated -is [bool]) "Test-DevkitElevated returns a boolean (got: $elevated)"
+
+    # Anchored on where these packages actually land: Git and Neovim go to Program Files,
+    # glow and oh-my-posh to %LOCALAPPDATA%. Getting this backwards would tell an
+    # unelevated user their Git install needs no UAC prompt.
+    $split = Get-ElevationSplit -Keys @('git', 'neovim', 'glow', 'oh-my-posh') -Catalog $catalog
+    Assert ($split.Machine -contains 'Git') "git is classified machine-wide"
+    Assert ($split.Machine -contains 'Neovim') "neovim is classified machine-wide"
+    Assert ($split.User -contains 'glow') "glow is classified per-user"
+    Assert ($split.User -contains 'Oh My Posh') "oh-my-posh is classified per-user"
+    Assert ($split.Machine.Count -eq 2 -and $split.User.Count -eq 2) "every selected key lands on exactly one side"
+
+    $empty = Get-ElevationSplit -Keys @() -Catalog $catalog
+    Assert ($empty.Machine.Count -eq 0 -and $empty.User.Count -eq 0) "an empty selection splits into nothing"
+
+    # An unknown key is dropped rather than guessed at - guessing 'user' would suppress
+    # a warning the user needed.
+    $unknown = Get-ElevationSplit -Keys @('not-a-real-tool') -Catalog $catalog
+    Assert ($unknown.Machine.Count -eq 0 -and $unknown.User.Count -eq 0) "an unknown key is ignored, not guessed"
     Write-Host ""
     #endregion
 
@@ -332,7 +367,8 @@ try {
     # genuinely requires so this asserts Prerequisites specifically, nothing else.
     $cfg.Git.DefaultProfile.Name = "Test User"
     $cfg.Git.DefaultProfile.Email = "test@example.com"
-    $cfg.RepoLocations = @("C:epos")
+    $cfg.RepoLocations = @("C:
+epos")
     $cfg.PowerShell.Modules = @("z")
     $cfg.PowerShell.OhMyPoshTheme = "theme.omp.json"
     $validation = Test-DevkitConfig -Config $cfg

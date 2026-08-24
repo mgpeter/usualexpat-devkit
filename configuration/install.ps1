@@ -8,14 +8,20 @@
     Uses PwshSpectreConsole for a rich console UI experience.
 
 .NOTES
-    Requires PowerShell 7.0 or higher
-    Administrator privileges are recommended: the prerequisites step can install
-    system-wide packages with winget. Use -SkipAdminCheck to run without them
-    (individual package installs may then raise their own elevation prompts).
+    Requires PowerShell 7.0 or higher. Administrator privileges are NOT required to run
+    the wizard - everything it writes (~/.devkit, $PROFILE, ~/.gitconfig, ~/.claude,
+    %LOCALAPPDATA%\nvim, and its PowerShell modules) is user-space.
+
+    Admin matters only inside the prerequisites step, and only for the tools that install
+    machine-wide (Git, Neovim, Node.js, PowerShell 7, Starship). That step says so once
+    it knows what you ticked, and winget raises its own elevation prompt per package.
 #>
 
 [CmdletBinding()]
 param(
+    # Retained as a no-op. The gate this used to bypass is gone: whether a run needs
+    # Admin depends on which prerequisites are ticked in step 3, which nothing before
+    # that step can know. Kept declared so existing invocations do not start erroring.
     [switch]$SkipAdminCheck
 )
 
@@ -32,18 +38,6 @@ $script:LibPath = Join-Path $PSScriptRoot "lib"
 # Version info
 $script:DevkitVersion = "1.0.0"
 $script:DevkitName = "Devkit by Usual Expat"
-
-#region Admin Check
-if (-not $SkipAdminCheck) {
-    $isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")
-    if (-not $isAdmin) {
-        Write-Host "This installer requires Administrator privileges." -ForegroundColor Red
-        Write-Host "The prerequisites step installs system-wide packages with winget." -ForegroundColor Yellow
-        Write-Host "Run PowerShell as Administrator, or re-run with -SkipAdminCheck." -ForegroundColor Yellow
-        exit 1
-    }
-}
-#endregion
 
 #region PwshSpectreConsole Setup
 function Install-SpectreConsole {

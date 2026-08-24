@@ -431,6 +431,44 @@ function Show-PrerequisitesStep {
         return $Config
     }
 
+    # --- Elevation notice ----------------------------------------------------
+    # This is the ONLY point in the wizard where Admin can matter, and the first point
+    # where it is answerable: the question is not "is this shell elevated" but "does
+    # what you just ticked install machine-wide". install.ps1 used to gate the whole run
+    # on the former, which blocked `devkit update` from an ordinary shell for a wizard
+    # that is otherwise entirely user-space.
+    #
+    # Warn and proceed rather than refuse: winget raises its own elevation prompt per
+    # package, so an unelevated run of a machine-wide install still works, it just asks.
+    if (-not (Test-DevkitElevated)) {
+        $split = Get-ElevationSplit -Keys $keys -Catalog $catalog
+        if ($split.Machine.Count -gt 0) {
+            Write-Host ""
+            Write-SpectreHost "[yellow]Not running elevated.[/] These install machine-wide and will each raise a UAC prompt:"
+            Write-SpectreHost "  [yellow]$($split.Machine -join ', ')[/]"
+            if ($split.User.Count -gt 0) {
+                Write-SpectreHost "These install for your user and will not:"
+                Write-SpectreHost "  [dim]$($split.User -join ', ')[/]"
+            }
+            Write-Host ""
+
+            if (-not (Read-SpectreConfirm -Prompt "Continue?" -DefaultAnswer "y")) {
+                Write-SpectreHost "[yellow]Skipping prerequisite installation.[/]"
+                Write-SpectreHost "[dim]Re-run from an elevated shell, or install these by hand:[/]"
+                foreach ($key in $keys) {
+                    $row = $catalog | Where-Object { $_.Key -eq $key } | Select-Object -First 1
+                    if ($row) { Write-SpectreHost "  [dim]$($row.InstallHint)[/]" }
+                }
+                # Cleared, not left as-ticked: nothing ran, and the Review screen reads
+                # this block in the past tense.
+                $Config.Prerequisites.Install = $false
+                $Config.Prerequisites.Selected = @()
+                Write-Host ""
+                return $Config
+            }
+        }
+    }
+
     # --- Install now ---------------------------------------------------------
     Write-Host ""
     Write-SpectreHost "[dim]Installer output is captured to keep this screen readable; each package can take a minute or two.[/]"

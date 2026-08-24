@@ -65,7 +65,8 @@ The **Auto** column shows what the wizard can install: `yes` for winget and font
 
 2. **Run the Interactive Installation Wizard**
 
-   Run as admin in PowerShell 7+:
+   In PowerShell 7+ (no Admin needed - the wizard is user-space, and the
+   prerequisites step asks before installing anything machine-wide):
 
    ```powershell
    . "./configuration/install.ps1"

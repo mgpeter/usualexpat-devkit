@@ -600,6 +600,7 @@ function Get-DevkitPrerequisites {
             DetectOverride = 'Test-PwshAvailable'
             ModuleName = $null; Fonts = @(); DependsOn = @()
             Tier = 'Required'; PreSelect = $true; HandledBy = 'prereqs'
+            Elevation = 'machine'
             InstallHint = 'winget install --id Microsoft.PowerShell -e'; HelpUrl = ''
         }
         @{
@@ -609,6 +610,7 @@ function Get-DevkitPrerequisites {
             FallbackPaths = @('C:\Program Files\Git\cmd\git.exe')
             DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
             Tier = 'Required'; PreSelect = $true; HandledBy = 'prereqs'
+            Elevation = 'machine'
             InstallHint = 'winget install --id Git.Git -e'; HelpUrl = ''
         }
         @{
@@ -618,6 +620,7 @@ function Get-DevkitPrerequisites {
             FallbackPaths = @('%LOCALAPPDATA%\Programs\oh-my-posh\bin\oh-my-posh.exe')
             DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
             Tier = 'Required'; PreSelect = $true; HandledBy = 'prereqs'
+            Elevation = 'user'
             InstallHint = 'winget install --id JanDeDobbeleer.OhMyPosh -e'; HelpUrl = ''
         }
         @{
@@ -629,6 +632,7 @@ function Get-DevkitPrerequisites {
             FallbackPaths = @('%LOCALAPPDATA%\Microsoft\WinGet\Links\starship.exe', '%ProgramFiles%\starship\bin\starship.exe')
             DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
             Tier = 'Optional'; PreSelect = $false; HandledBy = 'prereqs'
+            Elevation = 'machine'
             InstallHint = 'winget install --id Starship.Starship -e'; HelpUrl = ''
         }
         @{
@@ -640,6 +644,7 @@ function Get-DevkitPrerequisites {
             Fonts = @('meslo')          # default; the wizard offers a multi-select
             DependsOn = @('oh-my-posh') # installed BY oh-my-posh, so it must exist first
             Tier = 'Required'; PreSelect = $true; HandledBy = 'prereqs'
+            Elevation = 'user'
             InstallHint = 'oh-my-posh font install meslo --headless'; HelpUrl = ''
         }
         @{
@@ -649,6 +654,7 @@ function Get-DevkitPrerequisites {
             FallbackPaths = @('C:\Program Files\Neovim\bin\nvim.exe')
             DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
             Tier = 'Optional'; PreSelect = $true; HandledBy = 'prereqs'
+            Elevation = 'machine'
             InstallHint = 'winget install --id Neovim.Neovim -e'; HelpUrl = ''
         }
         @{
@@ -658,6 +664,7 @@ function Get-DevkitPrerequisites {
             FallbackPaths = @('%LOCALAPPDATA%\Microsoft\WinGet\Links\glow.exe')
             DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
             Tier = 'Optional'; PreSelect = $true; HandledBy = 'prereqs'
+            Elevation = 'user'
             InstallHint = 'winget install --id charmbracelet.glow -e'; HelpUrl = ''
         }
         @{
@@ -667,6 +674,7 @@ function Get-DevkitPrerequisites {
             FallbackPaths = @('C:\Program Files\nodejs\node.exe')
             DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
             Tier = 'Optional'; PreSelect = $false; HandledBy = 'prereqs'
+            Elevation = 'machine'
             InstallHint = 'winget install --id OpenJS.NodeJS.LTS -e'; HelpUrl = ''
         }
         @{
@@ -678,6 +686,7 @@ function Get-DevkitPrerequisites {
             DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
             # Never pre-selected: this downloads and runs a script from the internet.
             Tier = 'Optional'; PreSelect = $false; HandledBy = 'prereqs'
+            Elevation = 'user'
             InstallHint = 'irm https://claude.ai/install.ps1 | iex'; HelpUrl = 'https://claude.ai'
         }
         @{
@@ -689,6 +698,7 @@ function Get-DevkitPrerequisites {
             FallbackPaths = @('%LOCALAPPDATA%\Programs\Herdr\bin\herdr.exe')
             DetectOverride = $null; ModuleName = $null; Fonts = @(); DependsOn = @()
             Tier = 'Optional'; PreSelect = $false; HandledBy = 'prereqs'
+            Elevation = 'user'
             InstallHint = 'winget install --id Herdr.Herdr.Preview -e'; HelpUrl = 'https://herdr.dev'
         }
         @{
@@ -698,12 +708,80 @@ function Get-DevkitPrerequisites {
             FallbackPaths = @()
             DetectOverride = $null; ModuleName = 'PwshSpectreConsole'; Fonts = @(); DependsOn = @()
             Tier = 'Required'; PreSelect = $true
+            Elevation = 'user'
             # install.ps1 prompts for this before lib/ is dot-sourced - the wizard UI
             # cannot render without it, so it can never be a wizard step. Reporting only.
             HandledBy = 'installer-bootstrap'
             InstallHint = 'Install-Module -Name PwshSpectreConsole -Scope CurrentUser'; HelpUrl = ''
         }
     )
+}
+
+function Test-DevkitElevated {
+    <#
+    .SYNOPSIS
+        True when the current process is running as Administrator
+    .DESCRIPTION
+        THE elevation check. `install.ps1` used to hard-gate the whole wizard on this;
+        it no longer can, because whether a run needs Admin depends on which
+        prerequisites the user ticks in step 3 and nothing before that step knows.
+        Everything else the wizard writes is user-space.
+
+        Never throws: an identity that cannot be resolved reads as "not elevated", which
+        is the answer that produces a warning rather than a silent assumption of rights.
+    .OUTPUTS
+        Boolean
+    #>
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        return ([Security.Principal.WindowsPrincipal]$identity).IsInRole(
+            [Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+function Get-ElevationSplit {
+    <#
+    .SYNOPSIS
+        Splits a set of prerequisite keys into the ones that install machine-wide and
+        the ones that install for the current user
+    .DESCRIPTION
+        Drives the "this will raise a UAC prompt" notice in the wizard's prerequisites
+        step and in `devkit prereqs install`. Classification only - it deliberately does
+        not change any install command, so nothing that installs today can start failing.
+
+        Rows are classified in the catalogue itself (Elevation = machine | user), keyed
+        off where each package actually lands: the FallbackPaths already record that
+        Git and Neovim go to Program Files while oh-my-posh, glow and herdr go to
+        %LOCALAPPDATA%. An unrecognised key is ignored rather than guessed at.
+    .PARAMETER Keys
+        Prerequisite keys the user selected
+    .PARAMETER Catalog
+        Catalogue rows (defaults to Get-DevkitPrerequisites)
+    .OUTPUTS
+        Hashtable - Machine and User, each an array of display Names
+    #>
+    param(
+        [string[]]$Keys = @(),
+        [array]$Catalog = @()
+    )
+
+    if (-not $Catalog -or $Catalog.Count -eq 0) { $Catalog = Get-DevkitPrerequisites }
+
+    $split = @{ Machine = @(); User = @() }
+
+    foreach ($key in $Keys) {
+        $row = $Catalog | Where-Object { $_.Key -eq $key } | Select-Object -First 1
+        if (-not $row) { continue }
+        if ($row.Elevation -eq 'machine') {
+            $split.Machine += $row.Name
+        } else {
+            $split.User += $row.Name
+        }
+    }
+
+    return $split
 }
 
 function Get-PrerequisiteState {
@@ -929,4 +1007,5 @@ function Test-DevkitConfig {
 # Prerequisites:
 # - Test-CommandAvailable, Test-WingetAvailable, Test-NerdFontInstalled
 # - Get-DevkitPrerequisites, Get-PrerequisiteState
+# - Test-DevkitElevated, Get-ElevationSplit
 # - New-DevkitConfig, Test-DevkitConfig
