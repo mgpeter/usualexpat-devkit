@@ -1882,6 +1882,7 @@ function Invoke-Installation {
         ModuleResults = $null
         ThemePath = $null
         StarshipConfig = ""
+        StarshipGitPanel = $false
         Errors = @()
     }
 
@@ -1956,7 +1957,15 @@ function Invoke-Installation {
                 $results.StarshipConfig = Install-DevkitStarshipConfig `
                     -Mode $mode `
                     -Preset $Config.PowerShell.StarshipPreset `
-                    -CustomPath $Config.PowerShell.StarshipConfig
+                    -CustomPath $Config.PowerShell.StarshipConfig `
+                    -GitPanel ([bool]$Config.PowerShell.StarshipGitPanel)
+
+                # Recorded from the FILE, not from what the wizard asked for: the panel
+                # declines on a format it cannot place the branch into, and Keep mode
+                # never applies it at all. The next task writes DEVKIT_GIT_PANEL from
+                # this, and the two must agree - a config with the panel and a shell
+                # without the hook renders no branch whatsoever.
+                $results.StarshipGitPanel = Test-DevkitStarshipGitPanel -Path $results.StarshipConfig
 
                 if ($mode -eq 'Keep') {
                     Write-SpectreHost "  [dim](keeping your existing starship.toml)[/]"
@@ -1993,6 +2002,7 @@ function Invoke-Installation {
                     -ThemePath $themeArg `
                     -Engine $promptEngine `
                     -StarshipConfigPath $results.StarshipConfig `
+                    -GitPanel $results.StarshipGitPanel `
                     -SourceRoot $SourceRoot
             }
         }

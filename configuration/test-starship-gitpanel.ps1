@@ -149,12 +149,43 @@ foreach ($state in @('CONFLICT', 'DIRTY', 'DIVERGED', 'CLEAN')) {
     Assert ($text -match "\$\{env_var\.DEVKIT_GIT_$state\}") "the format references DEVKIT_GIT_$state"
 }
 Assert ($text -notmatch '\$git_branch') "no bare `$git_branch` is left in the format"
-Assert ($text -match 'symbol = "BR "') "the preset's branch glyph carries over, with one trailing space"
+Assert ($text.Contains('symbol = "BR"')) "the preset's branch glyph carries over"
 Assert (([regex]::Matches($text, 'bold fg:green bg:color_aqua')).Count -ge 1) "the segment background is reused"
 Assert ($text -match '\$\{count\}') "git_status counts are numbered"
 Assert ($text -match 'modified\s*=\s*"\[~\$\{count\}\]') "modified renders as ~N"
 Assert ($text -match '\[time\]') "unrelated sections survive"
 Assert ($text -match 'palettes\.gruvbox_dark') "the palette survives"
+Write-Host ""
+
+# --- Test 1c: the preset's own rendering is preserved -----------------------
+Write-Host "Test 1c: the panel reuses the preset's formats rather than imposing its own" -ForegroundColor Yellow
+# The panel used to write its own git_branch and git_status formats. That silently
+# restyled the prompt the user had chosen: nerd-font-symbols lost the "on " before its
+# branch and the [ ] around its status, both of which come from formats the preset never
+# overrode. Literal Contains checks, not regex - these strings are nothing but $ and [ ].
+Assert ($text.Contains('format = ''[[ $symbol $env_value ]($style)]($style)''')) "the branch reuses the preset's own format, spacing and all"
+Assert (-not $text.Contains('symbol = "BR "')) "the branch symbol is copied verbatim, never padded"
+
+# The preset hard-codes its foreground INSIDE the branch format. Left there it beats the
+# module style and all four states render the same colour, which is the entire point.
+$cleanSection = [regex]::Match($text, '(?s)\[env_var\.DEVKIT_GIT_CLEAN\](.*?)(\r?\n\[|$)').Groups[1].Value
+Assert (-not $cleanSection.Contains('fg:color_fg0')) "the branch's hard-coded foreground is swapped for a `$style reference"
+Assert ($cleanSection.Contains('style = "bold fg:green bg:color_aqua"')) "the state colour is carried on the module style instead"
+
+Assert ($text.Contains("style = 'bg:color_aqua'")) "the preset's git_status style is re-emitted verbatim"
+Assert ($text.Contains('format = ''[[($all_status$ahead_behind )](fg:color_fg0 bg:color_aqua)]($style)''')) "the preset's git_status format is re-emitted verbatim"
+
+# A preset that overrides only `symbol` inherits Starship's default formats, and the
+# panel has to inherit them too - by omitting the keys entirely rather than guessing.
+$pathNfs = New-Fixture 'nfs' $symbolsOnly
+Add-DevkitStarshipGitPanel -Path $pathNfs | Out-Null
+$textNfs = Get-Content -LiteralPath $pathNfs -Raw
+$statusNfs = [regex]::Match($textNfs, '(?s)\[git_status\](.*?)(\r?\n\[|$)').Groups[1].Value
+Assert ($statusNfs -notmatch '(?m)^\s*format\s*=') "no git_status format is written when the preset had none"
+Assert ($statusNfs -notmatch '(?m)^\s*style\s*=') "no git_status style is written when the preset had none"
+Assert ($statusNfs.Contains('${count}')) "the counts are still written"
+Assert ($textNfs.Contains('format = ''on [$symbol$env_value]($style) ''')) "the branch keeps Starship's default 'on ' wrapper"
+Assert ($textNfs.Contains('symbol = "git "')) "a symbol carrying its own trailing space keeps exactly one"
 Write-Host ""
 
 # --- Test 2: no duplicate tables --------------------------------------------
@@ -183,6 +214,17 @@ $normalise = { param($t) (($t -replace "`r`n", "`n") -split "`n" | Where-Object 
 $diff = Compare-Object (& $normalise $powerline).Split("`n") (& $normalise $restored).Split("`n")
 Assert ($null -eq $diff) "the restored config matches the original line for line"
 Assert ($restored -match '\$git_branch') "`$git_branch is back in the format"
+Write-Host ""
+
+# --- Test 3b: Convert-StarshipBranchFormat ----------------------------------
+Write-Host "Test 3b: git_branch formats convert to env_var formats" -ForegroundColor Yellow
+Assert ((Convert-StarshipBranchFormat -Format '') -eq 'on [$symbol$env_value]($style) ') "an empty format falls back to Starship's default, with 'on ' intact"
+Assert ((Convert-StarshipBranchFormat -Format 'on [$symbol$branch]($style) ') -eq 'on [$symbol$env_value]($style) ') "`$branch becomes `$env_value"
+Assert ((Convert-StarshipBranchFormat -Format '[${branch}]($style)') -eq '[$env_value]($style)') "the braced `${branch} form converts too"
+# Powerline presets hard-code the segment colour inside the format. Left alone it beats
+# the module style and all four states render the same colour.
+Assert ((Convert-StarshipBranchFormat -Format '[[ $symbol $branch ](fg:color_fg0 bg:color_aqua)]($style)') -eq '[[ $symbol $env_value ]($style)]($style)') "an inline fg style group is replaced by a `$style reference"
+Assert ((Convert-StarshipBranchFormat -Format '[$branch](bg:blue)') -eq '[$env_value](bg:blue)') "a group with no fg: is left alone"
 Write-Host ""
 
 # --- Test 4: a config with no top-level format ------------------------------
@@ -257,6 +299,53 @@ foreach ($state in @('CONFLICT', 'DIRTY', 'DIVERGED', 'CLEAN')) {
     # branch at all - worse than either half being missing.
     Assert ($panelBlock -match "\[env_var\.DEVKIT_GIT_$state\]") "the panel defines a module for DEVKIT_GIT_$state"
     Assert ($profileTemplate -match "env:DEVKIT_GIT_$state\s*=") "the profile classifier sets DEVKIT_GIT_$state"
+}
+Write-Host ""
+
+# --- Test 9b: the installer wires both halves -------------------------------
+Write-Host "Test 9b: Invoke-Installation passes the gate through to variables.ps1" -ForegroundColor Yellow
+# The bug this pins: Invoke-Installation called Install-DevkitStarshipConfig (whose
+# -GitPanel defaults to $true, so the panel WAS written) and then Save-VariablesPs1
+# without -GitPanel (which defaults to $false, so the gate was NOT). Result: a config
+# with the panel and a shell with no hook - the prompt rendered no branch at all, and
+# only `devkit prompt gitpanel off` + `on` repaired it. Asserted structurally, because
+# the defect was a missing argument at a call site, not a wrong value.
+$wizardAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    "$SourceRoot\configuration\lib\wizard.ps1", [ref]$null, [ref]$null)
+$installFn = $wizardAst.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+    $n.Name -eq 'Invoke-Installation' }, $true) | Select-Object -First 1
+Assert ($null -ne $installFn) "Invoke-Installation is found in wizard.ps1"
+
+$installCalls = @($installFn.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] }, $true))
+
+function Test-CallPassesGitPanel {
+    param([string]$CommandName)
+    $call = @($installCalls | Where-Object { $_.GetCommandName() -eq $CommandName })[0]
+    if (-not $call) { return $false }
+    return @($call.CommandElements | Where-Object {
+        $_ -is [System.Management.Automation.Language.CommandParameterAst] -and
+        $_.ParameterName -eq 'GitPanel' }).Count -gt 0
+}
+
+Assert (Test-CallPassesGitPanel 'Install-DevkitStarshipConfig') "the installer honours the wizard's git-panel answer"
+Assert (Test-CallPassesGitPanel 'Save-VariablesPs1') "the installer writes DEVKIT_GIT_PANEL to match"
+
+# Every other writer of variables.ps1 has to carry it too, or the same split reappears
+# from `devkit prompt use` / `preset` / `gitpanel`.
+foreach ($file in @('lib\wizard.ps1', 'powershell\devkit.ps1')) {
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+        "$SourceRoot\configuration\$file", [ref]$null, [ref]$null)
+    $saves = @($ast.FindAll({ param($n)
+        $n -is [System.Management.Automation.Language.CommandAst] -and
+        $n.GetCommandName() -eq 'Save-VariablesPs1' }, $true))
+    $missing = @($saves | Where-Object {
+        @($_.CommandElements | Where-Object {
+            $_ -is [System.Management.Automation.Language.CommandParameterAst] -and
+            $_.ParameterName -eq 'GitPanel' }).Count -eq 0 })
+    Assert ($saves.Count -gt 0) "$file calls Save-VariablesPs1 ($($saves.Count) site(s))"
+    Assert ($missing.Count -eq 0) "every Save-VariablesPs1 call in $file passes -GitPanel"
 }
 Write-Host ""
 

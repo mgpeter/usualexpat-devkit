@@ -657,6 +657,12 @@ $script:DevkitStarshipPanelEnd   = '# --- devkit git panel END ---'
 # the panel block behind this prefix so removal can put them back verbatim.
 $script:DevkitStarshipArchiveMark = '#!devkit-orig!'
 
+# Starship's own default git_branch.format. A preset that only overrides `symbol` - which
+# is most of them, nerd-font-symbols included - inherits this, and it is where the "on "
+# before the branch comes from. Rebuilding the branch without it silently restyles a
+# prompt the user chose, so the panel reuses this rather than inventing its own wrapper.
+$script:DevkitStarshipDefaultBranchFormat = 'on [$symbol$branch]($style) '
+
 function Split-StarshipToml {
     <#
     .SYNOPSIS
@@ -751,6 +757,33 @@ function Get-StarshipSectionValue {
     return ''
 }
 
+function Convert-StarshipBranchFormat {
+    <#
+    .SYNOPSIS
+        Turns a git_branch format string into one an env_var module can render
+    .DESCRIPTION
+        Two substitutions, both needed to keep the preset looking like itself:
+
+          $branch    -> $env_value   (env_var modules expose the value under that name)
+          ](fg:... ) -> ]($style)    (powerline presets hard-code the segment colour
+                                      INSIDE the format; left alone it wins over the
+                                      module style and every state renders identically)
+
+        Everything else survives verbatim, which is what preserves the literal "on "
+        prefix, the surrounding spaces, and any powerline padding.
+    .PARAMETER Format
+        The preset's git_branch format, or "" to use Starship's default
+    .OUTPUTS
+        String
+    #>
+    param([string]$Format = '')
+
+    $source = if ($Format) { $Format } else { $script:DevkitStarshipDefaultBranchFormat }
+    $converted = [regex]::Replace($source, '\$\{?branch\}?', '$env_value')
+    # Only style groups that set a foreground: a bare ($style) reference must survive.
+    return [regex]::Replace($converted, '\]\((?<s>[^)]*fg:[^)]*)\)', ']($style)')
+}
+
 function Test-DevkitStarshipGitPanel {
     <#
     .SYNOPSIS
@@ -774,6 +807,14 @@ function New-DevkitStarshipPanelBlock {
         Branch symbol lifted from the preset's [git_branch], so the panel keeps its glyph
     .PARAMETER Background
         bg: token lifted from the preset, or "" for presets that use no background
+    .PARAMETER BranchFormat
+        The preset's git_branch format, reused so the branch keeps its wrapper text
+    .PARAMETER StatusFormat
+        The preset's git_status format, re-emitted verbatim. Empty means the preset never
+        overrode it, and the key is then omitted so Starship's default applies - that
+        default is what draws the [ ] around the status and orders it via $all_status.
+    .PARAMETER StatusStyle
+        The preset's git_status style, re-emitted verbatim. Empty omits the key.
     .PARAMETER Archive
         Original [git_branch] / [git_status] text, stored commented out so `gitpanel off`
         can restore the preset rather than leaving it degraded
@@ -783,10 +824,14 @@ function New-DevkitStarshipPanelBlock {
     param(
         [string]$Symbol = '',
         [string]$Background = '',
+        [string]$BranchFormat = '',
+        [string]$StatusFormat = '',
+        [string]$StatusStyle = '',
         [string]$Archive = ''
     )
 
     $bgSuffix = if ($Background) { " $Background" } else { '' }
+    $branchFormatOut = Convert-StarshipBranchFormat -Format $BranchFormat
     $lines = [System.Collections.Generic.List[string]]::new()
 
     $lines.Add($script:DevkitStarshipPanelBegin)
@@ -816,11 +861,7 @@ function New-DevkitStarshipPanelBlock {
         $lines.Add("[env_var.$varName]")
         if ($Symbol) { $lines.Add("symbol = `"$Symbol`"") }
         $lines.Add("style = `"bold fg:$colour$bgSuffix`"")
-        if ($Background) {
-            $lines.Add('format = "[ $symbol$env_value ]($style)"')
-        } else {
-            $lines.Add('format = "[$symbol$env_value]($style) "')
-        }
+        $lines.Add("format = '$branchFormatOut'")
     }
 
     # posh-git's counts, one colour per category. ${count} is the whole point of the
@@ -835,10 +876,15 @@ function New-DevkitStarshipPanelBlock {
         stashed    = @([string][char]0x2261, 'blue')
     }
 
+    # The preset's own format and style are re-emitted untouched, and omitted entirely
+    # when it never set them. Overriding them was the bug that cost nerd-font-symbols the
+    # [ ] around its status and reordered the categories: $all_status in Starship's
+    # default format already orders these, and only the per-category symbols need
+    # rewriting to carry a number.
     $lines.Add('')
     $lines.Add('[git_status]')
-    $lines.Add("style = `"$(if ($Background) { $Background } else { 'cyan' })`"")
-    $lines.Add('format = "[ $conflicted$untracked$modified$staged$renamed$deleted$ahead_behind$stashed]($style)"')
+    if ($StatusStyle) { $lines.Add("style = '$StatusStyle'") }
+    if ($StatusFormat) { $lines.Add("format = '$StatusFormat'") }
     foreach ($key in $counts.Keys) {
         $symbol = $counts[$key][0]
         $colour = $counts[$key][1]
@@ -982,12 +1028,14 @@ function Add-DevkitStarshipGitPanel {
         $symbol = if ($branchSection) {
             Get-StarshipSectionValue -SectionText $branchSection.Text -Key 'symbol'
         } else {
-            [string][char]0xE0A0
+            # Starship's own default git_branch symbol, space included.
+            "$([char]0xE0A0) "
         }
-        # Presets write the glyph bare and put the gap in their format; Starship's own
-        # default carries a trailing space. Normalise both so the panel format can stay
-        # a plain "$symbol$env_value".
-        if ($symbol) { $symbol = $symbol.TrimEnd() + ' ' }
+        # Used VERBATIM, never trimmed or padded. The gap before the branch lives in
+        # whichever half the preset owns: presets that write their own format put it
+        # there and leave the symbol bare (gruvbox-rainbow: "$symbol $branch" + ""),
+        # while presets that inherit the default format carry it on the symbol
+        # (nerd-font-symbols: " "). Normalising either one doubles the space.
 
         $background = ''
         foreach ($candidate in @($branchSection, $statusSection)) {
@@ -995,6 +1043,16 @@ function Add-DevkitStarshipGitPanel {
                 $background = Get-StarshipStyleBackground -SectionText $candidate.Text
             }
         }
+
+        $branchFormat = if ($branchSection) {
+            Get-StarshipSectionValue -SectionText $branchSection.Text -Key 'format'
+        } else { '' }
+        $statusFormat = if ($statusSection) {
+            Get-StarshipSectionValue -SectionText $statusSection.Text -Key 'format'
+        } else { '' }
+        $statusStyle = if ($statusSection) {
+            Get-StarshipSectionValue -SectionText $statusSection.Text -Key 'style'
+        } else { '' }
 
         $archiveParts = @()
         foreach ($candidate in @($branchSection, $statusSection)) {
@@ -1010,6 +1068,7 @@ function Add-DevkitStarshipGitPanel {
 
         $rebuilt = @($preamble.Trim("`n")) + @($kept | ForEach-Object { $_.Text.Trim("`n") })
         $panel = New-DevkitStarshipPanelBlock -Symbol $symbol -Background $background `
+            -BranchFormat $branchFormat -StatusFormat $statusFormat -StatusStyle $statusStyle `
             -Archive ($archiveParts -join "`n")
         $final = ((@($rebuilt | Where-Object { $_.Trim() }) -join "`n`n").TrimEnd() + "`n`n" + $panel + "`n")
 
@@ -2719,7 +2778,8 @@ function Remove-ClaudeStatusLine {
 # - Get-DevkitStarshipConfigPath, Install-DevkitStarshipConfig
 # Starship git panel:
 # - Split-StarshipToml, Get-StarshipStyleBackground, Get-StarshipSectionValue
-# - New-DevkitStarshipPanelBlock, Update-StarshipFormatForPanel, Remove-DevkitStarshipPanelText
+# - New-DevkitStarshipPanelBlock, Convert-StarshipBranchFormat
+# - Update-StarshipFormatForPanel, Remove-DevkitStarshipPanelText
 # - Add-DevkitStarshipGitPanel, Remove-DevkitStarshipGitPanel, Test-DevkitStarshipGitPanel
 # Claude Code & Herdr:
 # - Get-ClaudeUserRoot, Get-HerdrConfigRoot
